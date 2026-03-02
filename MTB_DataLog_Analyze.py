@@ -7,25 +7,30 @@ from tkinter import ttk
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
-from constants import BG, DARK
+from constants import BG, DARK, CAL_FIELDS
 from theme import setup_theme
 import widgets as w
 from file_manager import FileManagerMixin
 from plots import PlotsMixin
 from calibration import CalibrationMixin
+from bike_params import BikeParamsMixin
+from sag import SagMixin
+from free_plot import FreePlotMixin
 
 
-class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, tk.Tk):
+class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParamsMixin, SagMixin, FreePlotMixin, tk.Tk):
 
     # ── Init ─────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__()
         self.title("MountainBike_Logger_Analysis")
-        self.geometry("1200x700")
+        screen_w = self.winfo_screenwidth()
+        self.geometry(f"{screen_w}x700")
         self.configure(bg=BG)
 
         self.df                 = None
         self.calibrated_df      = None
+        self.cal_result_df      = None
         self.saved_calibrations = []
         self.cal_file_path      = None
         self._source_dir        = os.path.expanduser("~/Downloads")
@@ -33,6 +38,14 @@ class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, tk.Tk):
 
         setup_theme(self)
         self._build_ui()
+
+        _default_cal = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "__UserFiles", "Calibration_Config", "Default_Calibration_Config.csv")
+        if os.path.exists(_default_cal):
+            try:
+                self._load_cal_from_path(_default_cal)
+            except Exception:
+                pass
 
     def _build_ui(self):
         nb = ttk.Notebook(self, style="App.TNotebook")
@@ -43,8 +56,20 @@ class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, tk.Tk):
         self._build_import_tab()
 
         self.calibration_tab = tk.Frame(nb, bg=BG)
-        nb.add(self.calibration_tab, text="Calibration Settings")
+        nb.add(self.calibration_tab, text="Calibration Parameters")
         self._build_calibration_tab()
+
+        self.bike_params_tab = tk.Frame(nb, bg=BG)
+        nb.add(self.bike_params_tab, text="Bike Parameters")
+        self._build_bike_params_tab()
+
+        self.sag_tab = tk.Frame(nb, bg=BG)
+        nb.add(self.sag_tab, text="Sag")
+        self._build_sag_tab()
+
+        self.free_plot_tab = tk.Frame(nb, bg=BG)
+        nb.add(self.free_plot_tab, text="Free Plot")
+        self._build_free_plot_tab()
 
     # ── Import Data tab ──────────────────────────────────────────────────────
     def _build_import_tab(self):
@@ -131,10 +156,10 @@ class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, tk.Tk):
         # Form: signal combo + entry fields
         form_rows = [
             ("Signal to calibrate",        None),
-            ("Raw Signal Min",             "raw_min_entry"),
-            ("Raw Signal Max",             "raw_max_entry"),
-            ("Measured Value at Min",      "cal_min_entry"),
-            ("Measured Value at Max",      "cal_max_entry"),
+            ("Raw Signal at Min",             "raw_min_entry"),
+            ("Raw Signal at Max",             "raw_max_entry"),
+            ("Calibrated Value at Min",    "cal_min_entry"),
+            ("Calibrated Value at Max",    "cal_max_entry"),
             ("Bias",                       "bias_entry"),
             ("New Calibrated Signal Name", "new_signal_entry"),
         ]
@@ -142,29 +167,55 @@ class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, tk.Tk):
             tk.Label(frame, text=label, bg=BG, fg=DARK).grid(row=row, column=0, sticky="w")
             if attr is None:
                 self.cal_signal_var   = tk.StringVar()
-                self.cal_signal_combo = ttk.Combobox(frame, textvariable=self.cal_signal_var, state="readonly")
+                self.cal_signal_combo = ttk.Combobox(frame, textvariable=self.cal_signal_var, state="readonly", width=20)
                 self.cal_signal_combo.grid(row=row, column=1, padx=5, pady=5, sticky="we")
                 self.cal_signal_combo.bind("<<ComboboxSelected>>", self._update_cal_plots)
+            elif attr == "new_signal_entry":
+                _cal_names = [
+                    "Fork_Pos_mm", "Shock_Pos_mm", "Board_Volt",
+                    "aX_g", "aY_g", "aZ_g", "gX_dps", "gY_dps", "gZ_dps", "mX_uT", "mY_uT", "mZ_uT",
+                    "Board_Temp_degC", "Frt_Whl_Spd_mph", "Rr_Whl_Spd_mph",
+                    "Crank_Spd_rpm", "Req_Freq_Hz",
+                ]
+                widget = ttk.Combobox(frame, values=_cal_names, state="readonly", width=20)
+                widget.grid(row=row, column=1, sticky="w", padx=5, pady=2)
+                widget.bind("<<ComboboxSelected>>", self._sync_form_to_table)
+                setattr(self, attr, widget)
             else:
-                width  = 20 if attr == "new_signal_entry" else 10
-                widget = w.make_entry(frame, width=width)
+                widget = w.make_entry(frame, width=20)
                 widget.grid(row=row, column=1, sticky="w", padx=5, pady=2)
                 widget.bind("<KeyRelease>", self._sync_form_to_table)
                 setattr(self, attr, widget)
 
         # Saved calibrations treeview
-        cols = ("Signal", "Raw Signal Min", "Raw Signal Max", "Measured Value at Min", "Measured Value at Max", "Bias", "New Calibrated Signal Name", "Calibrated Min", "Calibrated Max")
-        self.cal_tree = ttk.Treeview(frame, columns=cols, show="headings", height=6)
-        for col in cols:
-            self.cal_tree.heading(col, text=col)
-            width = 150 if col in ("Signal", "New Calibrated Signal Name") else 100
-            self.cal_tree.column(col, width=width, anchor="center")
-        self.cal_tree.grid(row=7, column=0, columnspan=2, padx=5, pady=5, sticky="nsew")
+        col_defs = [
+            ("Signal",          "Signal",          90),
+            ("Calibrated_Name", "Calibrated_Name", 110),
+            ("Raw_Sig_Min",     "Raw_Sig_Min",      80),
+            ("Raw_Sig_Max",     "Raw_Sig_Max",      80),
+            ("Value_at_Min",    "Value_at_Min",     80),
+            ("Value_at_Max",    "Value_at_Max",     80),
+            ("Bias",            "Bias",             60),
+            ("Calibrated_Min",  "Calibrated_Min",   90),
+            ("Calibrated_Max",  "Calibrated_Max",   90),
+        ]
+        # col_id_order must match CAL_FIELDS exactly for positional value alignment
+        col_id_order = list(CAL_FIELDS)
+        self.cal_tree = ttk.Treeview(frame, columns=col_id_order, show="headings", height=6)
+        self.cal_tree["displaycolumns"] = [d[0] for d in col_defs]
+        for col_id, col_text, col_width in col_defs:
+            self.cal_tree.heading(col_id, text=col_text)
+            self.cal_tree.column(col_id, width=col_width, minwidth=col_width, anchor="center")
+
+        tree_scroll = ttk.Scrollbar(frame, orient="horizontal", command=self.cal_tree.xview)
+        self.cal_tree.configure(xscrollcommand=tree_scroll.set)
+        self.cal_tree.grid(row=7, column=0, columnspan=2, padx=5, pady=(5, 0), sticky="nsew")
+        tree_scroll.grid(row=8, column=0, columnspan=2, padx=5, sticky="ew")
         self.cal_tree.bind("<<TreeviewSelect>>", self.on_cal_tree_select)
 
         # Persistence buttons
         persist = tk.Frame(frame, bg=BG)
-        persist.grid(row=8, column=0, columnspan=2, pady=4, sticky="w")
+        persist.grid(row=9, column=0, columnspan=2, pady=4, sticky="w")
         for text, cmd in [
             ("Load CSV", self.load_cal_file),
             ("Save CSV", self.save_cal_file),

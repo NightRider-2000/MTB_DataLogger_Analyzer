@@ -71,6 +71,7 @@ class FileManagerMixin:
         self.plot_histogram(first)
         self._update_cal_plots()
         self._auto_populate_calibrations()
+        self._apply_all_calibrations()
 
     def _refresh_signal_lists(self):
         numeric_cols = list(self.df.select_dtypes(include="number").columns)
