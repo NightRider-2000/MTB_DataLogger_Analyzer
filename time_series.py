@@ -91,13 +91,16 @@ class TimeSeriesMixin:
             return
         if self.cal_result_df is None:
             return
+        # Reset x-axis limits so they are recalculated from the new data
+        self._ts_xlim_full    = None
+        self._ts_xlim_current = None
         cols = [""] + list(self.cal_result_df.columns)
         _defaults = {
             (0, 0): "Front_Wheel_Pos_perc",
             (0, 1): "Rear_Wheel_Pos_perc",
-            (1, 0): "Front_Wheel_Spd_mph",
-            (1, 1): "Rear_Wheel_Spd_mph",
-            (1, 2): "Crank_Spd_rpm",
+            (1, 0): "Front_Wheel_Spd_mmPs",
+            (1, 1): "Rear_Wheel_Spd_mmPs",
+            (2, 2): "Crank_Spd_rpm",
         }
         for i, plot_combos in enumerate(self._ts_combos):
             for j, combo in enumerate(plot_combos):
@@ -159,7 +162,7 @@ class TimeSeriesMixin:
         if self._ts_xlim_current is not None:
             ax.set_xlim(self._ts_xlim_current)
 
-        fig.tight_layout()
+        fig.subplots_adjust(left=0.10, right=0.98, top=0.88, bottom=0.20)
         self._ts_canvases[idx].draw()
 
     # ── Navigation ────────────────────────────────────────────────────────────

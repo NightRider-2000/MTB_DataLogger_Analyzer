@@ -8,12 +8,16 @@ import pandas as pd
 
 class FileManagerMixin:
 
+    _IGNORE_NAMES = {"OLA_deviceSettings", "OLA_settings"}
+
     def _populate_file_list(self):
         files = sorted(
             glob.glob(os.path.join(self._source_dir, "*.TXT")) +
             glob.glob(os.path.join(self._source_dir, "*.txt")),
             key=lambda f: os.path.basename(f).lower(),
         )
+        files = [f for f in files
+                 if os.path.splitext(os.path.basename(f))[0] not in self._IGNORE_NAMES]
         self._download_paths = files
         self.file_listbox.delete(0, tk.END)
         for f in files:
@@ -76,6 +80,11 @@ class FileManagerMixin:
         self.plot_histogram(first)
         self._update_cal_plots()
         self._auto_populate_calibrations()
+
+    def load_selected_files(self):
+        """Called by the 'Load Files Selected' button — runs the full calibration pipeline."""
+        if self.df is None:
+            return
         self._apply_all_calibrations()
 
     def _refresh_signal_lists(self):

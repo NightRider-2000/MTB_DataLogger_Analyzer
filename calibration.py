@@ -140,7 +140,7 @@ class CalibrationMixin:
             data  = calibrated.dropna()
             color = HIST_BAR_COLOR
             mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
-            self.ax_hist_cal.hist(data, bins=80, alpha=0.55, color=color)
+            self.ax_hist_cal.hist(data, bins=200, alpha=0.55, color=color)
             self.ax_hist_cal.axvline(mean, color=color, linestyle="--", linewidth=1.5)
             self.ax_hist_cal.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
             self.ax_hist_cal.axvline(mn,   color=color, linestyle="--", linewidth=1.5)

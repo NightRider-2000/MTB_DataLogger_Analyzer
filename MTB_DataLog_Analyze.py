@@ -85,6 +85,7 @@ class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParams
     def _build_import_tab(self):
         top = tk.Frame(self.signals_tab, bg=BG)
         top.pack(side=tk.TOP, fill=tk.X)
+        w.make_btn(top, "Load Files Selected",     self.load_selected_files).pack(side=tk.LEFT, padx=5, pady=5)
         w.make_btn(top, "Change Source Directory", self.change_source_dir).pack(side=tk.LEFT, padx=5, pady=5)
         w.make_btn(top, "Delete File",             self.delete_selected_file).pack(side=tk.LEFT, padx=5, pady=5)
 

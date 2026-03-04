@@ -59,7 +59,7 @@ class SuspSpeedMixin:
             comp_abs  = comp.abs() if not comp.empty else comp
             maxvals   = [s.max() for s in (comp_abs, rebound) if not s.empty]
             bin_max   = max(maxvals) if maxvals else 1.0
-            bin_edges = np.linspace(0, bin_max, 81)
+            bin_edges = np.linspace(0, bin_max, 201)
 
             if not comp.empty:
                 ax_hist.hist(comp_abs, bins=bin_edges, alpha=0.40, color=_COMP_COLOR,
@@ -124,5 +124,8 @@ class SuspSpeedMixin:
         ax.set_ylabel("Rear Speed (mm/s)", color=DARK, fontsize=8)
         w.style_ax(ax)
 
-        self._fig_susp_spd.tight_layout()
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self._fig_susp_spd.tight_layout()
         self._canvas_susp_spd.draw()

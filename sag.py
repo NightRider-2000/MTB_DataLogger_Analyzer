@@ -65,7 +65,7 @@ def _sag_plot(ax, df, col):
         return
     color = HIST_BAR_COLOR
     mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
-    ax.hist(data, bins=80, alpha=0.55, color=color)
+    ax.hist(data, bins=200, alpha=0.55, color=color)
     ax.axvline(mean, color=color, linestyle="--", linewidth=1.5)
     ax.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
     ax.axvline(mn,   color=color, linestyle="--", linewidth=1.5)
