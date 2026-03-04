@@ -7,7 +7,7 @@ A desktop application for loading, calibrating, and visualizing mountain bike su
 - **Import Data** — Load one or more OLA `.TXT` log files; view raw signal time series and histograms
 - **Bike Parameters** — Enter fork/shock travel, wheel circumference, spoke counts, head tube angle, and rear suspension motion ratio (editable table + CSV import/export)
 - **Calibration Parameters** — Map raw ADC signals to engineering units with a linear calibration; live preview updates on every keystroke; save/load calibration configs as CSV
-- **Sag** — Visualize static sag for front and rear suspension
+- **Sag** — Visualize dynamic sag for front and rear suspension, both wheel displacement and suspension stroke.
 - **Susp Speed** — Compression vs. rebound speed histograms (front and rear) plus a front vs. rear scatter plot with a 1:1 reference line and linear trend
 - **Time Series** — Three stacked, synchronized plots; zoom and pan controls; configurable signal selection per plot
 - **Free Plot** — Freely choose any two calibrated signals for an X–Y scatter or time series overlay
