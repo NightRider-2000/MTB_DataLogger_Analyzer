@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 import widgets as w
-from constants import BG, DARK, FIELD, ROW_ALT, CAL_FIELDS, HIST_COLORS, GRID
+from constants import BG, DARK, FIELD, ROW_ALT, CAL_FIELDS, HIST_BAR_COLOR, GRID
 
 
 class CalibrationMixin:
@@ -120,6 +120,11 @@ class CalibrationMixin:
         except ValueError:
             pass
 
+        # Override with edge-detected result if available in cal_result_df
+        if (self.cal_result_df is not None
+                and new_name in self.cal_result_df.columns):
+            calibrated = self.cal_result_df[new_name]
+
         # Calibrated time series panel
         self.ax_cal.clear()
         self.ax_cal.set_facecolor(BG)
@@ -133,14 +138,15 @@ class CalibrationMixin:
         self.ax_hist_cal.set_facecolor(BG)
         if calibrated is not None:
             data  = calibrated.dropna()
-            color = HIST_COLORS[0]
-            mean, std, mn, mx = data.mean(), data.std(), data.min(), data.max()
-            self.ax_hist_cal.hist(data, bins=40, alpha=0.55, color=color)
+            color = HIST_BAR_COLOR
+            mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
+            self.ax_hist_cal.hist(data, bins=80, alpha=0.55, color=color)
             self.ax_hist_cal.axvline(mean, color=color, linestyle="--", linewidth=1.5)
+            self.ax_hist_cal.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
             self.ax_hist_cal.axvline(mn,   color=color, linestyle="--", linewidth=1.5)
             self.ax_hist_cal.axvline(mx,   color=color, linestyle="--", linewidth=1.5)
             self.ax_hist_cal.axvspan(mean - std, mean + std, alpha=0.12, color=color)
-            stats_text = f"{new_name}\n  mean={mean:.4g}\n  std ={std:.4g}\n  min ={mn:.4g}\n  max ={mx:.4g}"
+            stats_text = f"{new_name}\n  mean={mean:.4g}\n  med ={med:.4g}\n  std ={std:.4g}\n  min ={mn:.4g}\n  max ={mx:.4g}"
             self.ax_hist_cal.text(
                 0.97, 0.97, stats_text,
                 transform=self.ax_hist_cal.transAxes, fontsize=7,
@@ -283,6 +289,94 @@ class CalibrationMixin:
             cols[cal_name] = a * self.df[signal] + b - bias
         self.cal_result_df = pd.DataFrame(cols, index=self.df.index)
 
+        # Crank speed RPM from falling-edge detection
+        _crank_cal = next((c for c in self.saved_calibrations
+                           if c.get("Calibrated_Name", "").strip() == "Crank_Spd_rpm"), None)
+        if (_crank_cal and _crank_cal.get("Signal") in self.df.columns
+                and hasattr(self, "chain_ring_spokes_var")):
+            import numpy as np
+            try:
+                n_spokes = max(1, int(float(self.chain_ring_spokes_var.get())))
+                raw = self.df[_crank_cal["Signal"]].dropna()
+                if len(raw) > n_spokes * 2:
+                    threshold = raw.median()
+                    binary = (raw > threshold).astype(int)
+                    falling = binary.diff() == -1
+                    edge_times = raw.index[falling]
+                    if len(edge_times) > n_spokes:
+                        rpm_vals, rpm_times = [], []
+                        for i in range(n_spokes, len(edge_times)):
+                            dt = (edge_times[i] - edge_times[i - n_spokes]).total_seconds()
+                            if dt > 0:
+                                rpm_vals.append(60.0 / dt)
+                                rpm_times.append(edge_times[i])
+                        if rpm_vals:
+                            rpm_series = pd.Series(np.nan, index=self.df.index, dtype=float)
+                            rpm_series.loc[rpm_times] = rpm_vals
+                            self.cal_result_df["Crank_Spd_rpm"] = rpm_series
+            except Exception:
+                pass
+
+        # Front wheel speed MPH from falling-edge detection
+        _frt_spd_cal = next((c for c in self.saved_calibrations
+                             if c.get("Calibrated_Name", "").strip() == "Front_Wheel_Spd_mph"), None)
+        if (_frt_spd_cal and _frt_spd_cal.get("Signal") in self.df.columns
+                and hasattr(self, "front_spoke_count_var")
+                and hasattr(self, "front_wheel_circ_var")):
+            import numpy as np
+            try:
+                n_spokes  = max(1, int(float(self.front_spoke_count_var.get())))
+                circ_in   = float(self.front_wheel_circ_var.get())   # inches per revolution
+                raw = self.df[_frt_spd_cal["Signal"]].dropna()
+                if len(raw) > n_spokes * 2:
+                    threshold = raw.median()
+                    binary = (raw > threshold).astype(int)
+                    falling = binary.diff() == -1
+                    edge_times = raw.index[falling]
+                    if len(edge_times) > n_spokes:
+                        spd_vals, spd_times = [], []
+                        for i in range(n_spokes, len(edge_times)):
+                            dt = (edge_times[i] - edge_times[i - n_spokes]).total_seconds()
+                            if dt > 0:
+                                spd_vals.append(circ_in * 3600.0 / (63360.0 * dt))
+                                spd_times.append(edge_times[i])
+                        if spd_vals:
+                            spd_series = pd.Series(np.nan, index=self.df.index, dtype=float)
+                            spd_series.loc[spd_times] = spd_vals
+                            self.cal_result_df["Front_Wheel_Spd_mph"] = spd_series
+            except Exception:
+                pass
+
+        # Rear wheel speed MPH from falling-edge detection
+        _rr_spd_cal = next((c for c in self.saved_calibrations
+                            if c.get("Calibrated_Name", "").strip() == "Rear_Wheel_Spd_mph"), None)
+        if (_rr_spd_cal and _rr_spd_cal.get("Signal") in self.df.columns
+                and hasattr(self, "rear_spoke_count_var")
+                and hasattr(self, "front_wheel_circ_var")):
+            import numpy as np
+            try:
+                n_spokes  = max(1, int(float(self.rear_spoke_count_var.get())))
+                circ_in   = float(self.front_wheel_circ_var.get())   # inches per revolution
+                raw = self.df[_rr_spd_cal["Signal"]].dropna()
+                if len(raw) > n_spokes * 2:
+                    threshold = raw.median()
+                    binary = (raw > threshold).astype(int)
+                    falling = binary.diff() == -1
+                    edge_times = raw.index[falling]
+                    if len(edge_times) > n_spokes:
+                        spd_vals, spd_times = [], []
+                        for i in range(n_spokes, len(edge_times)):
+                            dt = (edge_times[i] - edge_times[i - n_spokes]).total_seconds()
+                            if dt > 0:
+                                spd_vals.append(circ_in * 3600.0 / (63360.0 * dt))
+                                spd_times.append(edge_times[i])
+                        if spd_vals:
+                            spd_series = pd.Series(np.nan, index=self.df.index, dtype=float)
+                            spd_series.loc[spd_times] = spd_vals
+                            self.cal_result_df["Rear_Wheel_Spd_mph"] = spd_series
+            except Exception:
+                pass
+
         # Rear wheel position via motion ratio lookup
         if (hasattr(self, "mr_tree")
                 and "Shock_Pos_mm" in self.cal_result_df.columns):
@@ -337,10 +431,71 @@ class CalibrationMixin:
             except (ValueError, TypeError):
                 pass
 
-        self._refresh_free_plot_signals()
-        self._update_sag_plots()
+        # Front wheel position percentage
+        if (hasattr(self, "front_susp_travel_var")
+                and "Front_Wheel_Pos_mm" in self.cal_result_df.columns):
+            try:
+                front_susp_max = float(self.front_susp_travel_var.get())
+                if front_susp_max:
+                    self.cal_result_df["Front_Wheel_Pos_perc"] = (
+                        self.cal_result_df["Front_Wheel_Pos_mm"] / front_susp_max * 100
+                    )
+            except (ValueError, TypeError):
+                pass
 
-    def _refresh_cal_treeview(self):
+        # Rear wheel position percentage
+        if (hasattr(self, "rear_susp_travel_var")
+                and "Rear_Wheel_Pos_mm" in self.cal_result_df.columns):
+            try:
+                rear_susp_max = float(self.rear_susp_travel_var.get())
+                if rear_susp_max:
+                    self.cal_result_df["Rear_Wheel_Pos_perc"] = (
+                        self.cal_result_df["Rear_Wheel_Pos_mm"] / rear_susp_max * 100
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        # Wheel position speed (mm/s) = diff(pos_mm) / diff(time_s)
+        _dt_s = self.cal_result_df.index.to_series().diff().dt.total_seconds()
+        if "Front_Wheel_Pos_mm" in self.cal_result_df.columns:
+            self.cal_result_df["Front_Wheel_Spd_mmPs"] = (
+                self.cal_result_df["Front_Wheel_Pos_mm"].diff() / _dt_s
+            )
+        if "Rear_Wheel_Pos_mm" in self.cal_result_df.columns:
+            self.cal_result_df["Rear_Wheel_Spd_mmPs"] = (
+                self.cal_result_df["Rear_Wheel_Pos_mm"].diff() / _dt_s
+            )
+
+        # Wheel-in-air flags
+        if "Front_Wheel_Pos_perc" in self.cal_result_df.columns:
+            self.cal_result_df["Front_Wheel_Air"] = (
+                self.cal_result_df["Front_Wheel_Pos_perc"] <= 9
+            ).astype(int)
+        if "Rear_Wheel_Pos_perc" in self.cal_result_df.columns:
+            self.cal_result_df["Rear_Wheel_Air"] = (
+                self.cal_result_df["Rear_Wheel_Pos_perc"] <= 9
+            ).astype(int)
+
+        # Update Calibrated_Min / Calibrated_Max in saved_calibrations
+        for cal in self.saved_calibrations:
+            cal_name = cal.get("Calibrated_Name", "").strip() or f"{cal['Signal']}_cal"
+            if cal_name in self.cal_result_df.columns:
+                series = self.cal_result_df[cal_name].dropna()
+                if not series.empty:
+                    cal["Calibrated_Min"] = round(series.min(), 6)
+                    cal["Calibrated_Max"] = round(series.max(), 6)
+                else:
+                    cal["Calibrated_Min"] = float("nan")
+                    cal["Calibrated_Max"] = float("nan")
+
+        self._refresh_free_plot_signals()
+        self._refresh_ts_signals()
+        self._update_sag_plots()
+        self._update_susp_speed_plots()
+        self._refresh_cal_treeview_display()
+
+    def _refresh_cal_treeview_display(self):
+        """Redraw the treeview from saved_calibrations without re-running calibrations."""
         self.cal_tree.delete(*self.cal_tree.get_children())
         self.cal_tree.tag_configure("even", background=FIELD,   foreground=DARK)
         self.cal_tree.tag_configure("odd",  background=ROW_ALT, foreground=DARK)
@@ -348,4 +503,7 @@ class CalibrationMixin:
             self.cal_tree.insert("", tk.END,
                                  tags=("even" if i % 2 == 0 else "odd",),
                                  values=tuple(cal[k] for k in CAL_FIELDS))
+
+    def _refresh_cal_treeview(self):
+        self._refresh_cal_treeview_display()
         self._apply_all_calibrations()

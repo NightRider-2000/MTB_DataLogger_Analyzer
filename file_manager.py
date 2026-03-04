@@ -55,7 +55,12 @@ class FileManagerMixin:
                 raw = raw.set_index(time_col).sort_index()
             frames.append(raw)
 
-        combined = pd.concat(frames).sort_index() if len(frames) > 1 else frames[0]
+        if len(frames) > 1:
+            combined = pd.concat(frames)
+            if all(isinstance(f.index, pd.DatetimeIndex) for f in frames):
+                combined = combined.sort_index()
+        else:
+            combined = frames[0]
         self.df = combined
         self.calibrated_df = self.df.copy()
 

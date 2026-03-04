@@ -1,7 +1,7 @@
 import tkinter as tk
 
 import widgets as w
-from constants import BG, DARK, GRID, HIST_COLORS
+from constants import BG, DARK, GRID, HIST_BAR_COLOR
 
 
 class SagMixin:
@@ -11,7 +11,7 @@ class SagMixin:
         frame.pack(fill=tk.BOTH, expand=True)
 
         self.fig_sag = w.make_figure(figsize=(14, 6), dpi=100)
-        self.axes_sag = self.fig_sag.subplots(2, 3)
+        self.axes_sag = self.fig_sag.subplots(2, 4)
 
         for ax in self.axes_sag.flat:
             ax.set_facecolor(BG)
@@ -40,11 +40,13 @@ class SagMixin:
         _sag_plot(self.axes_sag[0][0], self.cal_result_df, "Fork_Pos_mm")
         _sag_plot(self.axes_sag[0][1], self.cal_result_df, "Fork_Pos_perc")
         _sag_plot(self.axes_sag[0][2], self.cal_result_df, "Front_Wheel_Pos_mm")
+        _sag_plot(self.axes_sag[0][3], self.cal_result_df, "Front_Wheel_Pos_perc")
 
         # Row 1 — Rear Suspension
         _sag_plot(self.axes_sag[1][0], self.cal_result_df, "Shock_Pos_mm")
         _sag_plot(self.axes_sag[1][1], self.cal_result_df, "Shock_Pos_perc")
         _sag_plot(self.axes_sag[1][2], self.cal_result_df, "Rear_Wheel_Pos_mm")
+        _sag_plot(self.axes_sag[1][3], self.cal_result_df, "Rear_Wheel_Pos_perc")
 
         for ax in self.axes_sag.flat:
             w.style_ax(ax)
@@ -61,15 +63,16 @@ def _sag_plot(ax, df, col):
     if data.empty:
         ax.set_title(col, color=DARK, fontsize=8)
         return
-    color = HIST_COLORS[0]
-    mean, std, mn, mx = data.mean(), data.std(), data.min(), data.max()
-    ax.hist(data, bins=40, alpha=0.55, color=color)
+    color = HIST_BAR_COLOR
+    mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
+    ax.hist(data, bins=80, alpha=0.55, color=color)
     ax.axvline(mean, color=color, linestyle="--", linewidth=1.5)
+    ax.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
     ax.axvline(mn,   color=color, linestyle="--", linewidth=1.5)
     ax.axvline(mx,   color=color, linestyle="--", linewidth=1.5)
     ax.axvspan(mean - std, mean + std, alpha=0.12, color=color)
     ax.text(0.97, 0.97,
-            f"{col}\n  mean={mean:.4g}\n  std ={std:.4g}\n  min ={mn:.4g}\n  max ={mx:.4g}",
+            f"{col}\n  mean={mean:.4g}\n  med ={med:.4g}\n  std ={std:.4g}\n  min ={mn:.4g}\n  max ={mx:.4g}",
             transform=ax.transAxes, fontsize=7,
             verticalalignment="top", horizontalalignment="right", color=DARK,
             bbox=dict(boxstyle="round,pad=0.4", facecolor=BG, edgecolor=GRID, alpha=0.9))

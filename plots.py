@@ -1,5 +1,5 @@
 import widgets as w
-from constants import BG, DARK, HIST_COLORS, GRID
+from constants import BG, DARK, HIST_BAR_COLOR, GRID
 
 
 class PlotsMixin:
@@ -24,11 +24,17 @@ class PlotsMixin:
             date_val = self.df["rtcDate"].dropna().max()
             if date_val is not None:
                 title += f"  —  {date_val}"
+        try:
+            duration_min = (self.df.index.max() - self.df.index.min()).total_seconds() / 60
+            title = f"Duration: {duration_min:.2f} min\n{title}"
+        except Exception:
+            pass
         self.ax.set_title(title, color=DARK)
         self.ax.set_xlabel("Time", color=DARK)
         self.ax.set_ylabel("Value", color=DARK)
         w.style_ax(self.ax)
         self.fig.autofmt_xdate()
+        self.fig.tight_layout()
         self.canvas.draw()
 
     def plot_histogram(self, columns):
@@ -42,16 +48,17 @@ class PlotsMixin:
 
         stats_lines = []
         for i, col in enumerate(columns):
-            color = HIST_COLORS[i % len(HIST_COLORS)]
+            color = HIST_BAR_COLOR
             data  = self.df[col].dropna()
-            mean, std, mn, mx = data.mean(), data.std(), data.min(), data.max()
-            self.ax_hist.hist(data, bins=40, alpha=0.55, color=color, label=col)
+            mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
+            self.ax_hist.hist(data, bins=80, alpha=0.55, color=color, label=col)
             self.ax_hist.axvline(mean, color=color, linestyle="--", linewidth=1.5)
+            self.ax_hist.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
             self.ax_hist.axvline(mn,   color=color, linestyle="--", linewidth=1.5)
             self.ax_hist.axvline(mx,   color=color, linestyle="--", linewidth=1.5)
             self.ax_hist.axvspan(mean - std, mean + std, alpha=0.12, color=color)
             stats_lines.append(
-                f"{col}\n  mean={mean:.4g}\n  std ={std:.4g}\n  min ={mn:.4g}\n  max ={mx:.4g}"
+                f"{col}\n  mean={mean:.4g}\n  med ={med:.4g}\n  std ={std:.4g}\n  min ={mn:.4g}\n  max ={mx:.4g}"
             )
 
         self.ax_hist.text(
