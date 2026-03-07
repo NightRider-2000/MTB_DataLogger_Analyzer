@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(source:*)"
+      "Bash(source:*)",
+      "Bash(python /Users/samuelshartzer/Documents/GitHub/MTB_DataLogger_Analyzer/MTB_DataLog_Analyze.py)",
+      "Bash(pkill -f MTB_DataLog_Analyze.py)",
+      "Bash(python MTB_DataLog_Analyze.py)"
     ]
   }
 }
