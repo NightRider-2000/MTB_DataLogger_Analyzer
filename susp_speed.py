@@ -40,19 +40,30 @@ class SuspSpeedMixin:
             ax.clear()
             ax.set_facecolor(BG)
 
-        col_front = "Front_Wheel_Spd_mmPs"
-        col_rear  = "Rear_Wheel_Spd_mmPs"
+        # Filter to valid sample intervals only (10–20 ms), screen-local
+        _dt_s  = self.cal_result_df.index.to_series().diff().dt.total_seconds()
+        _dt_ms = _dt_s * 1000
+        _mask  = _dt_ms.between(10, 20)
+        df = self.cal_result_df[_mask]
+
+        # Filter to rows where rear wheel speed > 4.5 mph (bike is moving)
+        _rr_spd_col = "Rear_Horz_Wheel_Spd_mph"
+        if _rr_spd_col in df.columns:
+            df = df[df[_rr_spd_col] > 4.5]
+
+        col_front = "Front_Vert_Wheel_Spd_mmPs"
+        col_rear  = "Rear_Vert_Wheel_Spd_mmPs"
 
         # ── Histograms ────────────────────────────────────────────────────────
         for ax_hist, col, label in [
             (self._ax_hist_front, col_front, "Front Susp Speed (mm/s)"),
             (self._ax_hist_rear,  col_rear,  "Rear Susp Speed (mm/s)"),
         ]:
-            if col not in self.cal_result_df.columns:
+            if col not in df.columns:
                 w.style_ax(ax_hist)
                 continue
 
-            series  = self.cal_result_df[col].dropna()
+            series  = df[col].dropna()
             comp    = series[series < 0]
             rebound = series[series > 0]
 
@@ -80,44 +91,114 @@ class SuspSpeedMixin:
             ax_hist.set_ylabel("Count", color=DARK, fontsize=8)
             w.style_ax(ax_hist)
 
-        # ── Scatter: front speed (x) vs rear speed (y) ────────────────────────
+        # ── Scatter: original + time-aligned rear speed vs front speed ──────────
         ax = self._ax_scatter_spd
-        if (col_front in self.cal_result_df.columns
-                and col_rear in self.cal_result_df.columns):
-            pair = self.cal_result_df[[col_front, col_rear]].dropna()
-            x = pair[col_front].values
-            y = pair[col_rear].values
+        x_orig = np.array([])
+        y_orig = np.array([])
+        x_aln  = np.array([])
+        y_aln  = np.array([])
+        if (col_front in df.columns
+                and col_rear in df.columns):
+            front_series = df[col_front].dropna()
+            rear_series  = df[col_rear].dropna()
 
-            if len(x) > 1:
-                ax.scatter(x, y, s=1, alpha=0.25, color=_SCATTER_COLOR)
+            if len(front_series) > 1 and len(rear_series) > 1:
+                # Original (unaligned) pairs
+                pair   = df[[col_front, col_rear]].dropna()
+                x_orig = pair[col_front].values
+                y_orig = pair[col_rear].values
 
-                lim = 2000
-                ax.set_xlim(-lim, lim)
-                ax.set_ylim(-lim, lim)
+                # Numeric timestamps (seconds) for interpolation
+                t_front = front_series.index.view(np.int64) / 1e9
+                t_rear  = rear_series.index.view(np.int64)  / 1e9
+                x_all   = front_series.values
 
-                # Zero lines
-                ax.axhline(0, color=DARK, linewidth=0.6, linestyle="--")
-                ax.axvline(0, color=DARK, linewidth=0.6, linestyle="--")
+                # Dynamic lag: wheelbase_mm / rear_speed_mm_per_s
+                _wb_mm      = float(getattr(self, "wheel_base_var",
+                                            type("", (), {"get": lambda s: "1242"})()).get())
+                _MPH_TO_MMS = 1609.344 / 3600.0 * 1000.0   # mph → mm/s
+                _rr_spd_col = "Rear_Horz_Wheel_Spd_mph"
+                if _rr_spd_col in df.columns:
+                    rr_spd = df[_rr_spd_col].dropna()
+                    rr_t   = rr_spd.index.view(np.int64) / 1e9
+                    rr_mph = np.interp(t_front, rr_t, rr_spd.values)
+                    lag_s  = _wb_mm / (np.maximum(rr_mph, 3.0) * _MPH_TO_MMS)
+                else:
+                    lag_s = np.zeros(len(t_front))
 
-                # 1:1 line
-                ax.plot([-lim, lim], [-lim, lim],
-                        color="black", linewidth=1.2, label="1:1")
+                # Look up rear susp speed at t_front + lag (same road feature)
+                t_target = t_front + lag_s
+                y_all    = np.interp(t_target, t_rear, rear_series.values)
 
-                # Trend line forced through origin
-                slope = np.dot(x, y) / np.dot(x, x)
-                ax.plot([-lim, lim], [-lim * slope, lim * slope],
-                        color=_REBOUND_COLOR, linewidth=1.5, linestyle="--",
-                        label=f"trend  slope={slope:.2f}")
+                # Drop samples where target time is outside the rear signal range
+                valid = (t_target >= t_rear[0]) & (t_target <= t_rear[-1])
+                x_aln = x_all[valid]
+                y_aln = y_all[valid]
 
-                # Quadrant labels
-                ax.text(0.76, 0.93, "Comp", transform=ax.transAxes,
-                        color=DARK, fontsize=9, ha="center", va="top",
-                        fontweight="bold")
-                ax.text(0.24, 0.07, "Rebound", transform=ax.transAxes,
-                        color=DARK, fontsize=9, ha="center", va="bottom",
-                        fontweight="bold")
+        def _plot_trend_and_bins(ax, x, y, scatter_color, trend_color, bin_color,
+                                 scatter_label, trend_label_prefix, bin_label_prefix):
+            ax.scatter(x, y, s=1, alpha=0.15, color=scatter_color, label=scatter_label)
+            slope = np.dot(x, y) / np.dot(x, x)
+            ax.plot([-lim, lim], [-lim * slope, lim * slope],
+                    color=trend_color, linewidth=1.5, linestyle="--",
+                    label=f"{trend_label_prefix}  slope={slope:.2f}")
+            if len(x) > 20:
+                bins = np.linspace(x.min(), x.max(), 21)
+                bin_centers, bin_means, bin_stds = [], [], []
+                for lo, hi in zip(bins[:-1], bins[1:]):
+                    mask = (x >= lo) & (x < hi)
+                    if mask.sum() > 0:
+                        bin_centers.append((lo + hi) / 2)
+                        bin_means.append(y[mask].mean())
+                        bin_stds.append(y[mask].std())
+                if bin_centers:
+                    bc = np.array(bin_centers)
+                    bm = np.array(bin_means)
+                    bs = np.array(bin_stds)
+                    ax.plot(bc, bm, color=bin_color, linewidth=2.0,
+                            marker="o", markersize=4, label=f"{bin_label_prefix} bin mean", zorder=6)
+                    ax.fill_between(bc, bm - bs, bm + bs,
+                                    alpha=0.20, color=bin_color, label=f"{bin_label_prefix} ±1σ")
 
-                ax.legend(fontsize=7, facecolor=BG, edgecolor=DARK, labelcolor=DARK)
+        lim = 2000
+        if len(x_orig) > 1 or len(x_aln) > 1:
+            ax.set_xlim(-lim, lim)
+            ax.set_ylim(-lim, lim)
+
+            # Zero lines
+            ax.axhline(0, color=DARK, linewidth=0.6, linestyle="--")
+            ax.axvline(0, color=DARK, linewidth=0.6, linestyle="--")
+
+            # 1:1 line
+            ax.plot([-lim, lim], [-lim, lim],
+                    color="black", linewidth=1.2, label="1:1")
+
+            if len(x_orig) > 1:
+                _plot_trend_and_bins(ax, x_orig, y_orig,
+                                     scatter_color="#888888",
+                                     trend_color="#555555",
+                                     bin_color="#555555",
+                                     scatter_label="Original",
+                                     trend_label_prefix="Orig trend",
+                                     bin_label_prefix="Orig")
+            if len(x_aln) > 1:
+                _plot_trend_and_bins(ax, x_aln, y_aln,
+                                     scatter_color=_SCATTER_COLOR,
+                                     trend_color=_REBOUND_COLOR,
+                                     bin_color=DARK,
+                                     scatter_label="Aligned",
+                                     trend_label_prefix="Aligned trend",
+                                     bin_label_prefix="Aligned")
+
+            # Quadrant labels
+            ax.text(0.76, 0.93, "Comp", transform=ax.transAxes,
+                    color=DARK, fontsize=9, ha="center", va="top",
+                    fontweight="bold")
+            ax.text(0.24, 0.07, "Rebound", transform=ax.transAxes,
+                    color=DARK, fontsize=9, ha="center", va="bottom",
+                    fontweight="bold")
+
+            ax.legend(fontsize=7, facecolor=BG, edgecolor=DARK, labelcolor=DARK)
 
         ax.set_title("Front vs Rear Suspension Speed", color=DARK, fontsize=9)
         ax.set_xlabel("Front Speed (mm/s)", color=DARK, fontsize=8)

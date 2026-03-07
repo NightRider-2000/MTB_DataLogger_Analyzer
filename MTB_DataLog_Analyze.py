@@ -18,9 +18,11 @@ from sag import SagMixin
 from susp_speed import SuspSpeedMixin
 from free_plot import FreePlotMixin
 from time_series import TimeSeriesMixin
+from frequency import FrequencyMixin
+from imu import ImuMixin
 
 
-class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParamsMixin, SagMixin, SuspSpeedMixin, FreePlotMixin, TimeSeriesMixin, tk.Tk):
+class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParamsMixin, SagMixin, SuspSpeedMixin, FreePlotMixin, TimeSeriesMixin, FrequencyMixin, ImuMixin, tk.Tk):
 
     # ── Init ─────────────────────────────────────────────────────────────────
     def __init__(self):
@@ -65,6 +67,10 @@ class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParams
         nb.add(self.calibration_tab, text="Calibration Parameters")
         self._build_calibration_tab()
 
+        self.imu_tab = tk.Frame(nb, bg=BG)
+        nb.add(self.imu_tab, text="IMU")
+        self._build_imu_tab()
+
         self.sag_tab = tk.Frame(nb, bg=BG)
         nb.add(self.sag_tab, text="Sag")
         self._build_sag_tab()
@@ -76,6 +82,10 @@ class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParams
         self.time_series_tab = tk.Frame(nb, bg=BG)
         nb.add(self.time_series_tab, text="Time Series")
         self._build_time_series_tab()
+
+        self.frequency_tab = tk.Frame(nb, bg=BG)
+        nb.add(self.frequency_tab, text="Frequency")
+        self._build_frequency_tab()
 
         self.free_plot_tab = tk.Frame(nb, bg=BG)
         nb.add(self.free_plot_tab, text="Free Plot")
@@ -185,7 +195,7 @@ class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParams
                 _cal_names = [
                     "Fork_Pos_mm", "Shock_Pos_mm", "Board_SoC",
                     "aX_g", "aY_g", "aZ_g", "gX_dps", "gY_dps", "gZ_dps", "mX_uT", "mY_uT", "mZ_uT",
-                    "Board_Temp_degC", "Front_Wheel_Spd_mph", "Rear_Wheel_Spd_mph",
+                    "Board_Temp_degC", "Front_Horz_Wheel_Spd_mph", "Rear_Horz_Wheel_Spd_mph",
                     "Crank_Spd_rpm", "Req_Freq_Hz",
                 ]
                 widget = ttk.Combobox(frame, values=_cal_names, state="readonly", width=20)

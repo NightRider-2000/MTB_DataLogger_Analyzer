@@ -289,6 +289,47 @@ class CalibrationMixin:
             cols[cal_name] = a * self.df[signal] + b - bias
         self.cal_result_df = pd.DataFrame(cols, index=self.df.index)
 
+        # Rotate board-frame IMU signals → ISO vehicle frame (X fwd, Y left, Z up).
+        # Board mounting: X mostly down, Y mostly forward, Z lateral.
+        # Verified at rest: raw aX_g ≈ -cos(θ)·g, aY_g ≈ -sin(θ)·g at pitch_offset θ.
+        if "aX_g" in self.cal_result_df.columns and "aY_g" in self.cal_result_df.columns:
+            import numpy as np
+            try:
+                _theta = np.radians(float(self.pitch_offset_var.get()))
+            except (AttributeError, ValueError):
+                _theta = np.radians(30.5)
+            _ax = self.cal_result_df["aX_g"].values.astype(float)
+            _ay = self.cal_result_df["aY_g"].values.astype(float)
+            _az = self.cal_result_df["aZ_g"].values.astype(float) if "aZ_g" in self.cal_result_df.columns else np.zeros(len(_ax))
+            # ISO X=fwd (0g rest), Z=up (+1g rest), Y=lateral
+            self.cal_result_df["aFwd_g"]  = -(np.sin(_theta) * _ax - np.cos(_theta) * _ay)
+            self.cal_result_df["aVert_g"] = -np.cos(_theta) * _ax - np.sin(_theta) * _ay
+            self.cal_result_df["aLat_g"]  = _az
+            self.cal_result_df.drop(columns=[c for c in ["aX_g", "aY_g", "aZ_g"]
+                                             if c in self.cal_result_df.columns], inplace=True)
+
+            # Gyros: same rotation for gX/gY; gZ (lateral) = pure pitch rate
+            if "gX_dps" in self.cal_result_df.columns and "gY_dps" in self.cal_result_df.columns:
+                _gx = self.cal_result_df["gX_dps"].values.astype(float)
+                _gy = self.cal_result_df["gY_dps"].values.astype(float)
+                _gz = self.cal_result_df["gZ_dps"].values.astype(float) if "gZ_dps" in self.cal_result_df.columns else np.zeros(len(_gx))
+                self.cal_result_df["gRoll_dps"]  =  np.sin(_theta) * _gx - np.cos(_theta) * _gy
+                self.cal_result_df["gYaw_dps"]   = -np.cos(_theta) * _gx - np.sin(_theta) * _gy
+                self.cal_result_df["gPitch_dps"] = _gz
+                self.cal_result_df.drop(columns=[c for c in ["gX_dps", "gY_dps", "gZ_dps"]
+                                                 if c in self.cal_result_df.columns], inplace=True)
+
+            # Magnetometer: same rotation
+            if "mX_uT" in self.cal_result_df.columns and "mY_uT" in self.cal_result_df.columns:
+                _mx = self.cal_result_df["mX_uT"].values.astype(float)
+                _my = self.cal_result_df["mY_uT"].values.astype(float)
+                _mz = self.cal_result_df["mZ_uT"].values.astype(float) if "mZ_uT" in self.cal_result_df.columns else np.zeros(len(_mx))
+                self.cal_result_df["mFwd_uT"]  =  np.sin(_theta) * _mx - np.cos(_theta) * _my
+                self.cal_result_df["mVert_uT"] = -np.cos(_theta) * _mx - np.sin(_theta) * _my
+                self.cal_result_df["mLat_uT"]  = _mz
+                self.cal_result_df.drop(columns=[c for c in ["mX_uT", "mY_uT", "mZ_uT"]
+                                                 if c in self.cal_result_df.columns], inplace=True)
+
         # Crank speed RPM from falling-edge detection
         _crank_cal = next((c for c in self.saved_calibrations
                            if c.get("Calibrated_Name", "").strip() == "Crank_Spd_rpm"), None)
@@ -297,9 +338,10 @@ class CalibrationMixin:
             import numpy as np
             try:
                 n_spokes = max(1, int(float(self.chain_ring_spokes_var.get())))
+                _perc = 0.70
                 raw = self.df[_crank_cal["Signal"]].dropna()
                 if len(raw) > n_spokes * 2:
-                    threshold = raw.median()
+                    threshold = raw.quantile(0.02) + (raw.quantile(0.98) - raw.quantile(0.02)) * _perc
                     binary = (raw > threshold).astype(int)
                     falling = binary.diff() == -1
                     edge_times = raw.index[falling]
@@ -311,15 +353,14 @@ class CalibrationMixin:
                                 rpm_vals.append(60.0 / dt)
                                 rpm_times.append(edge_times[i])
                         if rpm_vals:
-                            rpm_series = pd.Series(np.nan, index=self.df.index, dtype=float)
-                            rpm_series.loc[rpm_times] = rpm_vals
-                            self.cal_result_df["Crank_Spd_rpm"] = rpm_series
-            except Exception:
-                pass
+                            tmp = pd.Series(rpm_vals, index=pd.DatetimeIndex(rpm_times), dtype=float)
+                            self.cal_result_df["Crank_Spd_rpm"] = tmp.reindex(self.df.index).ffill(limit=20)
+            except Exception as e:
+                print(f"Crank speed calc error: {e}")
 
         # Front wheel speed MPH from falling-edge detection
         _frt_spd_cal = next((c for c in self.saved_calibrations
-                             if c.get("Calibrated_Name", "").strip() == "Front_Wheel_Spd_mph"), None)
+                             if c.get("Calibrated_Name", "").strip() == "Front_Horz_Wheel_Spd_mph"), None)
         if (_frt_spd_cal and _frt_spd_cal.get("Signal") in self.df.columns
                 and hasattr(self, "front_spoke_count_var")
                 and hasattr(self, "front_wheel_circ_var")):
@@ -327,9 +368,10 @@ class CalibrationMixin:
             try:
                 n_spokes  = max(1, int(float(self.front_spoke_count_var.get())))
                 circ_in   = float(self.front_wheel_circ_var.get())   # inches per revolution
+                _perc = 0.70
                 raw = self.df[_frt_spd_cal["Signal"]].dropna()
                 if len(raw) > n_spokes * 2:
-                    threshold = raw.median()
+                    threshold = raw.quantile(0.02) + (raw.quantile(0.98) - raw.quantile(0.02)) * _perc
                     binary = (raw > threshold).astype(int)
                     falling = binary.diff() == -1
                     edge_times = raw.index[falling]
@@ -341,25 +383,25 @@ class CalibrationMixin:
                                 spd_vals.append(circ_in * 3600.0 / (63360.0 * dt))
                                 spd_times.append(edge_times[i])
                         if spd_vals:
-                            spd_series = pd.Series(np.nan, index=self.df.index, dtype=float)
-                            spd_series.loc[spd_times] = spd_vals
-                            self.cal_result_df["Front_Wheel_Spd_mph"] = spd_series
-            except Exception:
-                pass
+                            tmp = pd.Series(spd_vals, index=pd.DatetimeIndex(spd_times), dtype=float)
+                            self.cal_result_df["Front_Horz_Wheel_Spd_mph"] = tmp.reindex(self.df.index).ffill(limit=20)
+            except Exception as e:
+                print(f"Front wheel speed calc error: {e}")
 
         # Rear wheel speed MPH from falling-edge detection
         _rr_spd_cal = next((c for c in self.saved_calibrations
-                            if c.get("Calibrated_Name", "").strip() == "Rear_Wheel_Spd_mph"), None)
+                            if c.get("Calibrated_Name", "").strip() == "Rear_Horz_Wheel_Spd_mph"), None)
         if (_rr_spd_cal and _rr_spd_cal.get("Signal") in self.df.columns
                 and hasattr(self, "rear_spoke_count_var")
-                and hasattr(self, "front_wheel_circ_var")):
+                and hasattr(self, "rear_wheel_circ_var")):
             import numpy as np
             try:
                 n_spokes  = max(1, int(float(self.rear_spoke_count_var.get())))
-                circ_in   = float(self.front_wheel_circ_var.get())   # inches per revolution
+                circ_in   = float(self.rear_wheel_circ_var.get())   # inches per revolution
+                _perc = 0.70
                 raw = self.df[_rr_spd_cal["Signal"]].dropna()
                 if len(raw) > n_spokes * 2:
-                    threshold = raw.median()
+                    threshold = raw.quantile(0.02) + (raw.quantile(0.98) - raw.quantile(0.02)) * _perc
                     binary = (raw > threshold).astype(int)
                     falling = binary.diff() == -1
                     edge_times = raw.index[falling]
@@ -371,11 +413,10 @@ class CalibrationMixin:
                                 spd_vals.append(circ_in * 3600.0 / (63360.0 * dt))
                                 spd_times.append(edge_times[i])
                         if spd_vals:
-                            spd_series = pd.Series(np.nan, index=self.df.index, dtype=float)
-                            spd_series.loc[spd_times] = spd_vals
-                            self.cal_result_df["Rear_Wheel_Spd_mph"] = spd_series
-            except Exception:
-                pass
+                            tmp = pd.Series(spd_vals, index=pd.DatetimeIndex(spd_times), dtype=float)
+                            self.cal_result_df["Rear_Horz_Wheel_Spd_mph"] = tmp.reindex(self.df.index).ffill(limit=20)
+            except Exception as e:
+                print(f"Rear wheel speed calc error: {e}")
 
         # Rear wheel position via motion ratio lookup
         if (hasattr(self, "mr_tree")
@@ -458,11 +499,11 @@ class CalibrationMixin:
         # Wheel position speed (mm/s) = diff(pos_mm) / diff(time_s)
         _dt_s = self.cal_result_df.index.to_series().diff().dt.total_seconds()
         if "Front_Wheel_Pos_mm" in self.cal_result_df.columns:
-            self.cal_result_df["Front_Wheel_Spd_mmPs"] = (
+            self.cal_result_df["Front_Vert_Wheel_Spd_mmPs"] = (
                 self.cal_result_df["Front_Wheel_Pos_mm"].diff() / _dt_s
             )
         if "Rear_Wheel_Pos_mm" in self.cal_result_df.columns:
-            self.cal_result_df["Rear_Wheel_Spd_mmPs"] = (
+            self.cal_result_df["Rear_Vert_Wheel_Spd_mmPs"] = (
                 self.cal_result_df["Rear_Wheel_Pos_mm"].diff() / _dt_s
             )
 
@@ -475,6 +516,131 @@ class CalibrationMixin:
             self.cal_result_df["Rear_Wheel_Air"] = (
                 self.cal_result_df["Rear_Wheel_Pos_perc"] <= 9
             ).astype(int)
+
+        # Dynamic sag: 0.3 Hz low-pass of Wheel_Pos_perc, mean-centred
+        #   result = filtered - mean(filtered)  [% points]
+        _TWO_PI_FC = 2.0 * np.pi * 0.3   # 0.3 Hz cutoff
+        _dt_arr = self.cal_result_df.index.to_series().diff().dt.total_seconds().values
+        for _src, _dst in [
+            ("Front_Wheel_Pos_perc", "Front_Dynamic_Sag_Perc"),
+            ("Rear_Wheel_Pos_perc",  "Rear_Dynamic_Sag_Perc"),
+        ]:
+            if _src in self.cal_result_df.columns:
+                _sig = self.cal_result_df[_src].values.astype(float)
+                _out = np.empty(len(_sig))
+                _out[0] = _sig[0]
+                for _i in range(1, len(_sig)):
+                    _dt_i = _dt_arr[_i] if np.isfinite(_dt_arr[_i]) and _dt_arr[_i] > 0 else 1.0 / 67.0
+                    _a    = _dt_i / (1.0 / _TWO_PI_FC + _dt_i)
+                    _prev = _out[_i - 1] if np.isfinite(_out[_i - 1]) else _sig[_i]
+                    _out[_i] = _a * _sig[_i] + (1.0 - _a) * _prev if np.isfinite(_sig[_i]) else _prev
+                self.cal_result_df[_dst] = _out - np.nanmean(_out)
+
+        # Gear selection: nearest cassette sprocket from crank/wheel RPM ratio
+        if ("Crank_Spd_rpm" in self.cal_result_df.columns
+                and "Rear_Horz_Wheel_Spd_mph" in self.cal_result_df.columns
+                and hasattr(self, "cassette_tree")
+                and hasattr(self, "chain_ring_teeth_var")
+                and hasattr(self, "rear_wheel_circ_var")):
+            try:
+                _cr_teeth  = float(self.chain_ring_teeth_var.get())
+                _circ_in   = float(self.rear_wheel_circ_var.get())
+                # Read cassette: list of (gear_number, teeth) sorted by gear number
+                _cass_rows = [(int(self.cassette_tree.set(iid, "Gear")),
+                               float(self.cassette_tree.set(iid, "Teeth")))
+                              for iid in self.cassette_tree.get_children()]
+                _cass_rows.sort(key=lambda r: r[0])
+                _gear_nums  = np.array([r[0] for r in _cass_rows], dtype=float)
+                _cass_teeth = np.array([r[1] for r in _cass_rows], dtype=float)
+
+                _crank_rpm = self.cal_result_df["Crank_Spd_rpm"].values.astype(float)
+                _speed_mph = self.cal_result_df["Rear_Horz_Wheel_Spd_mph"].values.astype(float)
+                # wheel RPM = speed_mph * 5280 * 12 / (circ_in * 60)
+                _wheel_rpm = _speed_mph * 1056.0 / _circ_in
+
+                # apparent sprocket teeth = chainring_teeth * crank_rpm / wheel_rpm
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    _apparent = np.where(
+                        (_wheel_rpm > 0) & (_crank_rpm > 0),
+                        _cr_teeth * _crank_rpm / _wheel_rpm,
+                        np.nan)
+
+                # For each sample find nearest cassette gear
+                _gear = np.full(len(_apparent), np.nan)
+                _valid = np.isfinite(_apparent)
+                if _valid.any():
+                    _diffs = np.abs(_apparent[_valid, None] - _cass_teeth[None, :])
+                    _gear[_valid] = _gear_nums[_diffs.argmin(axis=1)]
+
+                self.cal_result_df["Gear_Selected"] = _gear
+            except Exception as e:
+                print(f"Gear selection calc error: {e}")
+
+        # IMU attitude estimation — Pitch, Roll, Yaw (degrees)
+        # Yaw is gyro-only integration (magnetometer excluded — subject to hard-iron distortion)
+        _IMU_SIGNALS = ("aFwd_g", "aVert_g", "aLat_g",
+                        "gRoll_dps", "gPitch_dps", "gYaw_dps")
+        if all(s in self.cal_result_df.columns for s in _IMU_SIGNALS):
+            import numpy as np
+            try:
+                ALPHA        = 0.98   # gyro trust fraction (tunable)
+                SMOOTH_WIN   = 25     # rolling-average window (samples)
+
+                # ISO frame: X=fwd (0g rest), Z=up (+1g rest), Y=lateral
+                a_fwd  = self.cal_result_df["aFwd_g"].values.astype(float)
+                a_vert = self.cal_result_df["aVert_g"].values.astype(float)
+                a_lat  = self.cal_result_df["aLat_g"].values.astype(float)
+                g_roll  = self.cal_result_df["gRoll_dps"].values.astype(float)
+                g_pitch = self.cal_result_df["gPitch_dps"].values.astype(float)
+                g_yaw   = self.cal_result_df["gYaw_dps"].values.astype(float)
+
+                _dt_arr = (self.cal_result_df.index.to_series()
+                           .diff().dt.total_seconds().fillna(0.0).values)
+                n = len(a_fwd)
+                pitch = np.zeros(n)
+                roll  = np.zeros(n)
+                yaw   = np.zeros(n)
+
+                # Initialise from first finite accel sample
+                i0 = 0
+                for k in range(n):
+                    if (np.isfinite(a_fwd[k]) and np.isfinite(a_vert[k])
+                            and np.isfinite(a_lat[k])):
+                        i0 = k
+                        break
+
+                # ISO: pitch = arctan2(-aFwd, sqrt(aLat²+aVert²)), roll = arctan2(aLat, aVert)
+                pitch[i0] = np.degrees(np.arctan2(-a_fwd[i0],
+                                        np.sqrt(a_lat[i0]**2 + a_vert[i0]**2)))
+                roll[i0]  = np.degrees(np.arctan2(a_lat[i0], a_vert[i0]))
+                yaw[i0]   = 0.0   # no absolute heading reference without magnetometer
+
+                # Complementary filter loop — yaw is gyro-only integration
+                for i in range(i0 + 1, n):
+                    dt = min(_dt_arr[i], 0.1)   # cap at 100 ms (protects multi-file gaps)
+                    if not (np.isfinite(a_fwd[i]) and np.isfinite(a_vert[i])
+                            and np.isfinite(a_lat[i]) and np.isfinite(g_pitch[i])
+                            and np.isfinite(g_roll[i]) and np.isfinite(g_yaw[i])):
+                        pitch[i] = pitch[i-1];  roll[i] = roll[i-1];  yaw[i] = yaw[i-1]
+                        continue
+                    pitch_a = np.degrees(np.arctan2(-a_fwd[i],
+                                          np.sqrt(a_lat[i]**2 + a_vert[i]**2)))
+                    roll_a  = np.degrees(np.arctan2(a_lat[i], a_vert[i]))
+                    pitch[i] = ALPHA*(pitch[i-1] + g_pitch[i]*dt) + (1-ALPHA)*pitch_a
+                    roll[i]  = ALPHA*(roll[i-1]  + g_roll[i]*dt)  + (1-ALPHA)*roll_a
+                    yaw[i]   = yaw[i-1] + g_yaw[i]*dt
+
+                # Rolling-average post-filter (min_periods=1 avoids NaN at edges)
+                _w = SMOOTH_WIN
+                pitch = pd.Series(pitch).rolling(_w, center=True, min_periods=1).mean().values
+                roll  = pd.Series(roll ).rolling(_w, center=True, min_periods=1).mean().values
+                yaw   = pd.Series(yaw  ).rolling(_w, center=True, min_periods=1).mean().values
+
+                self.cal_result_df["Pitch_deg"] = pitch
+                self.cal_result_df["Roll_deg"]  = roll
+                self.cal_result_df["Yaw_deg"]   = yaw
+            except Exception:
+                pass
 
         # Update Calibrated_Min / Calibrated_Max in saved_calibrations
         for cal in self.saved_calibrations:
@@ -492,6 +658,8 @@ class CalibrationMixin:
         self._refresh_ts_signals()
         self._update_sag_plots()
         self._update_susp_speed_plots()
+        self._update_frequency_plot()
+        self._update_imu_plots()
         self._refresh_cal_treeview_display()
 
     def _refresh_cal_treeview_display(self):

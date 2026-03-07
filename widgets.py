@@ -79,3 +79,6 @@ def style_ax(ax):
         spine.set_edgecolor(DARK)
     ax.grid(True, color=GRID, linewidth=0.7, linestyle="-")
     ax.set_axisbelow(True)
+    for lbl in ax.get_xticklabels():
+        lbl.set_rotation(0)
+        lbl.set_ha("center")

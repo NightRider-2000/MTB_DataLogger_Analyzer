@@ -22,6 +22,12 @@ _DEFAULT_SHOCK  = [0.00, 1.91, 3.86, 5.85, 7.87, 9.93, 12.03, 14.18, 16.36,
 _DEFAULT_WHEEL  = [0, 6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 78,
                    84, 90, 96, 102, 108, 114, 120, 126, 132, 138, 144]
 
+# Cassette default: (Gear, Teeth) sorted by teeth ascending
+_DEFAULT_CASSETTE = [
+    (12, 10), (11, 12), (10, 14), (9, 16), (8, 18), (7, 21),
+    (6, 24),  (5, 28),  (4, 32),  (3, 36), (2, 42), (1, 52),
+]
+
 
 
 
@@ -121,18 +127,45 @@ class BikeParamsMixin:
             tk.Label(centre, text="[Bike_Picture.jpeg not found]",
                      bg=BG, fg=DARK, width=40, height=10).pack()
 
-        cr_frame = tk.Frame(centre, bg=BG)
-        cr_frame.pack(pady=(8, 0))
-        tk.Label(cr_frame, text="Chain Ring Spokes", bg=BG, fg=DARK,
-                 font=("", 10, "bold")).pack(side=tk.LEFT, padx=(0, 6))
+        ctr_grid = tk.Frame(centre, bg=BG)
+        ctr_grid.pack(pady=(8, 0))
+
+        tk.Label(ctr_grid, text="Chain Ring Spokes", bg=BG, fg=DARK,
+                 font=("", 10, "bold"), anchor="e").grid(row=0, column=0, sticky="e", padx=(0, 6), pady=3)
         self.chain_ring_spokes_var = tk.StringVar(value="10")
-        entry_crs = w.make_entry(cr_frame, width=_EW)
+        entry_crs = w.make_entry(ctr_grid, width=_EW)
         entry_crs.insert(0, "10")
-        entry_crs.pack(side=tk.LEFT)
+        entry_crs.grid(row=0, column=1, pady=3)
         def _on_crs_change(e):
             self.chain_ring_spokes_var.set(entry_crs.get())
         entry_crs.bind("<KeyRelease>", _on_crs_change)
         self._chain_ring_spokes_entry = entry_crs
+
+        tk.Label(ctr_grid, text="Chain Ring Teeth", bg=BG, fg=DARK,
+                 font=("", 10, "bold"), anchor="e").grid(row=1, column=0, sticky="e", padx=(0, 6), pady=3)
+        self.chain_ring_teeth_var = tk.StringVar(value="30")
+        entry_crt = w.make_entry(ctr_grid, width=_EW)
+        entry_crt.insert(0, "30")
+        entry_crt.grid(row=1, column=1, pady=3)
+        tk.Label(ctr_grid, text="teeth", bg=BG, fg=DARK).grid(row=1, column=2, sticky="w", padx=(4, 0), pady=3)
+        def _on_crt_change(e):
+            self.chain_ring_teeth_var.set(entry_crt.get())
+        entry_crt.bind("<KeyRelease>", _on_crt_change)
+        self._chain_ring_teeth_entry = entry_crt
+
+        tk.Label(ctr_grid, text="IMU Pitch Offset", bg=BG, fg=DARK,
+                 font=("", 10, "bold"), anchor="e").grid(row=2, column=0, sticky="e", padx=(0, 6), pady=3)
+        self.pitch_offset_var = tk.StringVar(value="30.5")
+        entry_po = w.make_entry(ctr_grid, width=_EW)
+        entry_po.insert(0, "30.5")
+        entry_po.grid(row=2, column=1, pady=3)
+        tk.Label(ctr_grid, text="deg", bg=BG, fg=DARK).grid(row=2, column=2, sticky="w", padx=(4, 0), pady=3)
+        def _on_po_change(e):
+            self.pitch_offset_var.set(entry_po.get())
+            if hasattr(self, "cal_result_df") and self.cal_result_df is not None:
+                self._apply_all_calibrations()
+        entry_po.bind("<KeyRelease>", _on_po_change)
+        self._pitch_offset_entry = entry_po
 
         # ── Right: front parameters ───────────────────────────────────────────
         right = tk.Frame(outer, bg=BG)
@@ -225,7 +258,49 @@ class BikeParamsMixin:
         entry3.bind("<KeyRelease>", _update_front_susp_travel)
         entry_fst.bind("<KeyRelease>", _on_fst_change)
 
-        # ── Bottom centre: motion ratio plot ──────────────────────────────────
+        # ── Bottom centre: cassette table ─────────────────────────────────────
+        cass_bot = tk.Frame(outer, bg=BG)
+        cass_bot.grid(row=1, column=1, sticky="n", pady=(0, 10))
+        tk.Label(cass_bot, text="Cassette", bg=BG, fg=DARK,
+                 font=("", 10, "bold")).pack(pady=(4, 2))
+        cassette_frame = tk.Frame(cass_bot, bg=BG)
+        cassette_frame.pack(anchor="center")
+        cassette_tree = ttk.Treeview(cassette_frame, columns=("Gear", "Teeth"),
+                                     show="headings", height=5)
+        cassette_tree.heading("Gear",  text="Gear")
+        cassette_tree.heading("Teeth", text="Teeth")
+        cassette_tree.column("Gear",  width=60, anchor="center")
+        cassette_tree.column("Teeth", width=60, anchor="center")
+        cassette_tree.tag_configure("even", background=FIELD,   foreground=DARK)
+        cassette_tree.tag_configure("odd",  background=ROW_ALT, foreground=DARK)
+        for i, (gear, teeth) in enumerate(_DEFAULT_CASSETTE):
+            cassette_tree.insert("", tk.END, values=(gear, teeth),
+                                 tags=("even" if i % 2 == 0 else "odd",))
+        cassette_scroll = ttk.Scrollbar(cassette_frame, orient="vertical",
+                                        command=cassette_tree.yview)
+        cassette_tree.configure(yscrollcommand=cassette_scroll.set)
+        cassette_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        cassette_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.cassette_tree = cassette_tree
+        cassette_tree.bind("<Double-1>", self._edit_cassette_cell)
+
+        # Wheel Base field below cassette table
+        wb_frame = tk.Frame(cass_bot, bg=BG)
+        wb_frame.pack(pady=(6, 0))
+        tk.Label(wb_frame, text="Wheel Base", bg=BG, fg=DARK,
+                 font=("", 10, "bold"), anchor="e").grid(row=0, column=0, sticky="e", padx=(0, 6), pady=3)
+        self.wheel_base_var = tk.StringVar(value="1242")
+        entry_wb = w.make_entry(wb_frame, width=_EW)
+        entry_wb.insert(0, "1242")
+        entry_wb.grid(row=0, column=1, pady=3)
+        tk.Label(wb_frame, text="mm", bg=BG, fg=DARK,
+                 anchor="w").grid(row=0, column=2, sticky="w", padx=(4, 0), pady=3)
+        def _on_wb_change(e):
+            self.wheel_base_var.set(entry_wb.get())
+        entry_wb.bind("<KeyRelease>", _on_wb_change)
+        self._wheel_base_entry = entry_wb
+
+        # ── Bottom left: motion ratio plot ────────────────────────────────────
         bot = tk.Frame(outer, bg=BG)
         bot.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
 
@@ -325,3 +400,35 @@ class BikeParamsMixin:
             writer.writerow(["Shock_Travel", "Wheel_Vertical_Travel"])
             for iid in self.mr_tree.get_children():
                 writer.writerow(self.mr_tree.item(iid, "values"))
+
+    def _edit_cassette_cell(self, event):
+        tree = self.cassette_tree
+        if tree.identify_region(event.x, event.y) != "cell":
+            return
+        row_id = tree.identify_row(event.y)
+        col_id = tree.identify_column(event.x)
+        col_idx = int(col_id.lstrip("#")) - 1
+        bbox = tree.bbox(row_id, col_id)
+        if not bbox:
+            return
+        x, y, width, height = bbox
+        values = list(tree.item(row_id, "values"))
+        var = tk.StringVar(value=values[col_idx])
+        entry = tk.Entry(tree, textvariable=var, bg=FIELD, fg=DARK,
+                         insertbackground=DARK, relief="flat")
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.focus_set()
+        entry.select_range(0, tk.END)
+
+        def commit(event=None):
+            values[col_idx] = var.get()
+            tree.item(row_id, values=tuple(values))
+            entry.destroy()
+
+        def cancel(event=None):
+            entry.destroy()
+
+        entry.bind("<Return>",   commit)
+        entry.bind("<Tab>",      commit)
+        entry.bind("<Escape>",   cancel)
+        entry.bind("<FocusOut>", commit)

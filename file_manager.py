@@ -57,6 +57,9 @@ class FileManagerMixin:
             if time_col in raw.columns:
                 raw[time_col] = pd.to_datetime(raw[time_col], format="mixed", errors="coerce")
                 raw = raw.set_index(time_col).sort_index()
+                # Drop first 2 s of each file to allow sensor initialization
+                if isinstance(raw.index, pd.DatetimeIndex) and len(raw) > 0:
+                    raw = raw[raw.index >= raw.index[0] + pd.Timedelta(seconds=2)]
             frames.append(raw)
 
         if len(frames) > 1:

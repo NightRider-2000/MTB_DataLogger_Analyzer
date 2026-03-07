@@ -50,7 +50,7 @@ class TimeSeriesMixin:
 
             # Row of signal selectors (one per signal slot)
             sel_row = tk.Frame(section, bg=BG)
-            sel_row.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 0))
+            sel_row.grid(row=0, column=0, sticky="ew", padx=4, pady=0)
             sel_row.columnconfigure(0, weight=1)
 
             inner_row = tk.Frame(sel_row, bg=BG)
@@ -98,8 +98,8 @@ class TimeSeriesMixin:
         _defaults = {
             (0, 0): "Front_Wheel_Pos_perc",
             (0, 1): "Rear_Wheel_Pos_perc",
-            (1, 0): "Front_Wheel_Spd_mmPs",
-            (1, 1): "Rear_Wheel_Spd_mmPs",
+            (1, 0): "Front_Horz_Wheel_Spd_mph",
+            (1, 1): "Rear_Horz_Wheel_Spd_mph",
             (2, 2): "Crank_Spd_rpm",
         }
         for i, plot_combos in enumerate(self._ts_combos):
@@ -155,14 +155,19 @@ class TimeSeriesMixin:
                     self._ts_xlim_full    = xlim
                     self._ts_xlim_current = xlim
 
-        ax.set_xlabel("Time" if idx == _N_PLOTS - 1 else "",
-                      color=DARK, fontsize=8)
+        is_bottom = (idx == _N_PLOTS - 1)
+        ax.set_xlabel("Time" if is_bottom else "", color=DARK, fontsize=8)
         w.style_ax(ax)
+        if not is_bottom:
+            ax.tick_params(axis="x", labelbottom=False)
 
         if self._ts_xlim_current is not None:
             ax.set_xlim(self._ts_xlim_current)
 
-        fig.subplots_adjust(left=0.10, right=0.98, top=0.88, bottom=0.20)
+        if is_bottom:
+            fig.subplots_adjust(left=0.10, right=0.98, top=0.92, bottom=0.22)
+        else:
+            fig.subplots_adjust(left=0.10, right=0.98, top=0.92, bottom=0.04)
         self._ts_canvases[idx].draw()
 
     # ── Navigation ────────────────────────────────────────────────────────────

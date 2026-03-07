@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import ttk
 
+import numpy as np
+
 import widgets as w
 from constants import BG, DARK, GRID
 
@@ -81,18 +83,58 @@ class FreePlotMixin:
         idx = x.index.intersection(y.index)
 
         if c_col and c_col in self.cal_result_df.columns:
-            c = self.cal_result_df[c_col].reindex(idx)
-            sc = self.ax_fp.scatter(x[idx], y[idx], c=c, cmap="plasma",
-                                    s=8, alpha=0.7, linewidths=0)
+            c_series = self.cal_result_df[c_col].dropna()
+            idx = idx.intersection(c_series.index)
+            xv = x[idx].values.astype(float)
+            yv = y[idx].values.astype(float)
+            cv = c_series[idx].values.astype(float)
+            sc = self.ax_fp.scatter(xv, yv, c=cv, cmap="plasma",
+                                    s=8, alpha=0.5, linewidths=0)
             cbar = self.fig_fp.colorbar(sc, ax=self.ax_fp)
             cbar.set_label(c_col, color=DARK)
             cbar.ax.yaxis.set_tick_params(color=DARK)
-            for label in cbar.ax.get_yticklabels():
-                label.set_color(DARK)
+            for lbl in cbar.ax.get_yticklabels():
+                lbl.set_color(DARK)
         else:
-            self.ax_fp.scatter(x[idx], y[idx], s=8, alpha=0.7,
+            xv = x[idx].values.astype(float)
+            yv = y[idx].values.astype(float)
+            self.ax_fp.scatter(xv, yv, s=8, alpha=0.5,
                                color=DARK, linewidths=0)
 
+        # ── Trend line (linear regression) ───────────────────────────────────
+        if len(xv) > 1:
+            m, b = np.polyfit(xv, yv, 1)
+            y_pred = m * xv + b
+            ss_res = np.sum((yv - y_pred) ** 2)
+            ss_tot = np.sum((yv - yv.mean()) ** 2)
+            r2 = 1 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+            x_line = np.array([xv.min(), xv.max()])
+            sign = "+" if b >= 0 else "-"
+            eq_label = f"y = {m:.3g}x {sign} {abs(b):.3g}   R²={r2:.3f}"
+            self.ax_fp.plot(x_line, m * x_line + b,
+                            color="#e05c2a", linewidth=1.8,
+                            linestyle="--", label=eq_label, zorder=5)
+
+        # ── Binned mean ± std (20 bins across x range) ───────────────────────
+        if len(xv) > 20:
+            bins = np.linspace(xv.min(), xv.max(), 21)
+            bin_centers, bin_means, bin_stds = [], [], []
+            for lo, hi in zip(bins[:-1], bins[1:]):
+                mask = (xv >= lo) & (xv < hi)
+                if mask.sum() > 0:
+                    bin_centers.append((lo + hi) / 2)
+                    bin_means.append(yv[mask].mean())
+                    bin_stds.append(yv[mask].std())
+            if bin_centers:
+                bc = np.array(bin_centers)
+                bm = np.array(bin_means)
+                bs = np.array(bin_stds)
+                self.ax_fp.plot(bc, bm, color="#2a7be0", linewidth=2.0,
+                                marker="o", markersize=5, label="Bin mean", zorder=6)
+                self.ax_fp.fill_between(bc, bm - bs, bm + bs,
+                                        alpha=0.20, color="#2a7be0", label="±1σ")
+
+        self.ax_fp.legend(fontsize=8, facecolor=BG, edgecolor=DARK, labelcolor=DARK)
         self.ax_fp.set_xlabel(x_col, color=DARK)
         self.ax_fp.set_ylabel(y_col, color=DARK)
         self.ax_fp.set_title(f"{y_col} vs {x_col}", color=DARK)
