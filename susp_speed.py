@@ -85,7 +85,9 @@ class SuspSpeedMixin:
 
             ax_hist.axvline(0, color=DARK, linewidth=1.0, linestyle="-")
             ax_hist.set_xlim(0, 1200)
-            ax_hist.legend(fontsize=7, facecolor=BG, edgecolor=DARK, labelcolor=DARK)
+            handles, _ = ax_hist.get_legend_handles_labels()
+            if handles:
+                ax_hist.legend(fontsize=7, facecolor=BG, edgecolor=DARK, labelcolor=DARK)
             ax_hist.set_title(label, color=DARK, fontsize=9)
             ax_hist.set_xlabel("mm/s", color=DARK, fontsize=8)
             ax_hist.set_ylabel("Count", color=DARK, fontsize=8)

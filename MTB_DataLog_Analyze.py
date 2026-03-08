@@ -37,7 +37,7 @@ class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParams
         self.cal_result_df      = None
         self.saved_calibrations = []
         self.cal_file_path      = None
-        self._source_dir        = os.path.expanduser("~/Downloads")
+        self._source_dir        = os.path.expanduser("~/Documents/MTB_DAQ/Archived_Data")
         self._download_paths    = []
 
         setup_theme(self)

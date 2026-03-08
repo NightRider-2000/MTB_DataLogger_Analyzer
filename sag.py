@@ -39,14 +39,14 @@ class SagMixin:
         # Row 0 — Front Suspension
         _sag_plot(self.axes_sag[0][0], self.cal_result_df, "Fork_Pos_mm")
         _sag_plot(self.axes_sag[0][1], self.cal_result_df, "Fork_Pos_perc")
-        _sag_plot(self.axes_sag[0][2], self.cal_result_df, "Front_Wheel_Pos_mm")
-        _sag_plot(self.axes_sag[0][3], self.cal_result_df, "Front_Wheel_Pos_perc")
+        _sag_plot(self.axes_sag[0][2], self.cal_result_df, "Front_Wheel_Pos_perc")
+        _sag_plot(self.axes_sag[0][3], self.cal_result_df, "Front_Wheel_Pos_perc", zoom_p90=True)
 
         # Row 1 — Rear Suspension
         _sag_plot(self.axes_sag[1][0], self.cal_result_df, "Shock_Pos_mm")
         _sag_plot(self.axes_sag[1][1], self.cal_result_df, "Shock_Pos_perc")
-        _sag_plot(self.axes_sag[1][2], self.cal_result_df, "Rear_Wheel_Pos_mm")
-        _sag_plot(self.axes_sag[1][3], self.cal_result_df, "Rear_Wheel_Pos_perc")
+        _sag_plot(self.axes_sag[1][2], self.cal_result_df, "Rear_Wheel_Pos_perc")
+        _sag_plot(self.axes_sag[1][3], self.cal_result_df, "Rear_Wheel_Pos_perc", zoom_p90=True)
 
         for ax in self.axes_sag.flat:
             w.style_ax(ax)
@@ -55,7 +55,7 @@ class SagMixin:
         self.canvas_sag.draw()
 
 
-def _sag_plot(ax, df, col):
+def _sag_plot(ax, df, col, zoom_p90=False):
     if col not in df.columns:
         ax.set_title(col, color=DARK, fontsize=8)
         return
@@ -63,9 +63,10 @@ def _sag_plot(ax, df, col):
     if data.empty:
         ax.set_title(col, color=DARK, fontsize=8)
         return
+    import numpy as np
     color = HIST_BAR_COLOR
     mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
-    ax.hist(data, bins=200, alpha=0.55, color=color)
+    counts, bin_edges, _ = ax.hist(data, bins=200, alpha=0.55, color=color)
     ax.axvline(mean, color=color, linestyle="--", linewidth=1.5)
     ax.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
     ax.axvline(mn,   color=color, linestyle="--", linewidth=1.5)
@@ -76,7 +77,16 @@ def _sag_plot(ax, df, col):
             transform=ax.transAxes, fontsize=7,
             verticalalignment="top", horizontalalignment="right", color=DARK,
             bbox=dict(boxstyle="round,pad=0.4", facecolor=BG, edgecolor=GRID, alpha=0.9))
-    ax.set_title(col, color=DARK, fontsize=8)
+    if zoom_p90:
+        x_left = data.quantile(0.98)
+        ax.set_xlim(left=x_left)
+        visible = counts[bin_edges[1:] >= x_left]
+        if visible.size:
+            ax.set_ylim(0, visible.max() * 1.15)
+        title = f"{col} (≥98th pctile)"
+    else:
+        title = col
+    ax.set_title(title, color=DARK, fontsize=8)
     ax.set_xlabel("Value", color=DARK, fontsize=7)
     ax.set_ylabel("Count", color=DARK, fontsize=7)
 

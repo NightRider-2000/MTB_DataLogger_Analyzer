@@ -97,9 +97,9 @@ __UserFiles/             — User-supplied config and image files
 
 ![](__UserFiles/ScreenShots/Screenshot%202026-03-07%20at%2012.43.28%20PM.png)
 
-**Sag** — Suspension stroke histograms showing dynamic sag distribution for front and rear.
+**Sag** — Fork/shock position and wheel travel histograms for front and rear; rightmost column zooms to the top 2% of travel to highlight deep-sag events.
 
-![](__UserFiles/ScreenShots/Screenshot%202026-03-07%20at%201.12.08%20PM.png)
+![](__UserFiles/ScreenShots/Screenshot%202026-03-08%20at%209.26.51%20AM.png)
 
 **Free Plot** — Arbitrary X–Y scatter or time-series overlay of any two calibrated signals; colour axis optional.
 
