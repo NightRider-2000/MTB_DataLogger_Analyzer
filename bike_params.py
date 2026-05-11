@@ -119,13 +119,9 @@ class BikeParamsMixin:
         # ── Centre: bike image + chain ring input ─────────────────────────────
         centre = tk.Frame(outer, bg=BG)
         centre.grid(row=0, column=1, sticky="nsew", pady=10)
-        try:
-            pil_img = Image.open(_BIKE_IMG).resize((_IMG_W, _IMG_H), Image.LANCZOS)
-            self._bike_photo = ImageTk.PhotoImage(pil_img)
-            tk.Label(centre, image=self._bike_photo, bg=BG).pack()
-        except Exception:
-            tk.Label(centre, text="[Bike_Picture.jpeg not found]",
-                     bg=BG, fg=DARK, width=40, height=10).pack()
+        self._bike_params_img_label = tk.Label(centre, bg=BG)
+        self._bike_params_img_label.pack()
+        self.after(0, self._load_bike_params_image)
 
         ctr_grid = tk.Frame(centre, bg=BG)
         ctr_grid.pack(pady=(8, 0))
@@ -309,6 +305,15 @@ class BikeParamsMixin:
         self._canvas_mr = FigureCanvasTkAgg(self._fig_mr, master=bot)
         self._canvas_mr.get_tk_widget().pack(anchor="center", pady=5)
         self._refresh_mr_plot()
+
+    def _load_bike_params_image(self):
+        try:
+            pil_img = Image.open(_BIKE_IMG).resize((_IMG_W, _IMG_H), Image.LANCZOS)
+            self._bike_photo = ImageTk.PhotoImage(pil_img)
+            self._bike_params_img_label.configure(image=self._bike_photo)
+        except Exception:
+            self._bike_params_img_label.configure(
+                text="[Bike_Picture.jpeg not found]", fg=DARK, width=40, height=10)
 
     # ── Motion ratio helpers ──────────────────────────────────────────────────
 

@@ -655,6 +655,7 @@ class CalibrationMixin:
                     cal["Calibrated_Max"] = float("nan")
 
         self._refresh_free_plot_signals()
+        self._refresh_free_histogram_signals()
         self._refresh_ts_signals()
         self._update_sag_plots()
         self._update_susp_speed_plots()

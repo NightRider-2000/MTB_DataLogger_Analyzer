@@ -27,6 +27,8 @@ class FileManagerMixin:
         directory = filedialog.askdirectory(title="Select Source Directory")
         if directory:
             self._source_dir = directory
+            if hasattr(self, "_source_dir_var"):
+                self._source_dir_var.set(directory)
             self._populate_file_list()
 
     def delete_selected_file(self):
