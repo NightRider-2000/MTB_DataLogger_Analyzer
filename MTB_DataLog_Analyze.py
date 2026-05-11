@@ -7,7 +7,7 @@ from tkinter import ttk
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
-from constants import BG, DARK, CAL_FIELDS
+from constants import BG, DARK, GRID, CAL_FIELDS
 from theme import setup_theme
 import widgets as w
 from file_manager import FileManagerMixin
@@ -17,12 +17,14 @@ from bike_params import BikeParamsMixin
 from sag import SagMixin
 from susp_speed import SuspSpeedMixin
 from free_plot import FreePlotMixin
+from free_histogram import FreeHistogramMixin
 from time_series import TimeSeriesMixin
 from frequency import FrequencyMixin
 from imu import ImuMixin
+from device import DeviceMixin
 
 
-class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParamsMixin, SagMixin, SuspSpeedMixin, FreePlotMixin, TimeSeriesMixin, FrequencyMixin, ImuMixin, tk.Tk):
+class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParamsMixin, SagMixin, SuspSpeedMixin, FreePlotMixin, FreeHistogramMixin, TimeSeriesMixin, FrequencyMixin, ImuMixin, tk.Tk):
 
     # ── Init ─────────────────────────────────────────────────────────────────
     def __init__(self):
@@ -54,6 +56,10 @@ class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParams
     def _build_ui(self):
         nb = ttk.Notebook(self, style="App.TNotebook")
         nb.pack(fill=tk.BOTH, expand=True)
+
+        self.device_tab = tk.Frame(nb, bg=BG)
+        nb.add(self.device_tab, text="Device")
+        self._build_device_tab()
 
         self.signals_tab = tk.Frame(nb, bg=BG)
         nb.add(self.signals_tab, text="Import Data")
@@ -88,8 +94,12 @@ class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParams
         self._build_frequency_tab()
 
         self.free_plot_tab = tk.Frame(nb, bg=BG)
-        nb.add(self.free_plot_tab, text="Free Plot")
+        nb.add(self.free_plot_tab, text="Free Scatter")
         self._build_free_plot_tab()
+
+        self.free_histogram_tab = tk.Frame(nb, bg=BG)
+        nb.add(self.free_histogram_tab, text="Free Histogram")
+        self._build_free_histogram_tab()
 
     # ── Import Data tab ──────────────────────────────────────────────────────
     def _build_import_tab(self):
@@ -119,11 +129,16 @@ class MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParams
         file_sec = tk.Frame(left, bg=BG)
         file_sec.grid(row=0, column=0, sticky="nsew")
         file_sec.columnconfigure(0, weight=1)
-        file_sec.rowconfigure(1, weight=1)
+        file_sec.rowconfigure(2, weight=1)
         tk.Label(file_sec, text="Available Files:", bg=BG, fg=DARK).grid(
             row=0, column=0, sticky="w", padx=5, pady=(5, 0))
+        self._source_dir_var = tk.StringVar(value=self._source_dir)
+        tk.Label(file_sec, textvariable=self._source_dir_var,
+                 bg=BG, fg=GRID, font=("TkFixedFont", 8),
+                 anchor="w", wraplength=0).grid(
+            row=1, column=0, sticky="ew", padx=5, pady=(0, 2))
         self.file_listbox = w.make_listbox(file_sec, selectmode=tk.EXTENDED)
-        self.file_listbox.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        self.file_listbox.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
         self.file_listbox.bind("<<ListboxSelect>>", self.on_file_select)
         self._populate_file_list()
 
