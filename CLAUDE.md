@@ -62,6 +62,10 @@ MTB_DataLog_Analyze.py — MountainBikeApp + __main__
 - ASCII command/response on USB CDC, with one exception: `MTB:GET` interleaves a raw binary block between `MTB:SIZE:<n>` and `MTB:CRC32:<hex>`
 - Commands: `MTB:STATUS`, `MTB:LIST`, `MTB:GET:<name>`, `MTB:DEL:<name>`. All replies terminate with `MTB:END`
 - Download integrity: the Teensy holds `_transferActive=true` for the whole duration including the trailing `MTB:CRC32` and `MTB:END` lines so the dashboard thread can't splice text into the binary stream or the CRC line. CRC32 verified on host via `zlib.crc32` (matches Teensy `crc32_update`); mismatch surfaces a popup but the file is still saved
+- Device-side gating: the Teensy enters STANDBY automatically whenever USB is connected (host port open or charger active). In STANDBY, recording is stopped, the file is fully closed, and MTB commands work. There is no manual TRANSFER-mode button anymore
+
+## CSV columns (current Teensy SW v21)
+The CSV the device writes has a new `event` column at the end — a 0/1 spike that's `1` on the single row sampled right after the user pressed the secondary button (lap/jump marker). `file_manager.py` reads columns by name so new fields don't break import, but downstream tools that assume column count should be aware
 
 ## Speed Edge-Detection (calibration.py)
 - Signals: `Crank_Spd_rpm` (A2mV), `Front_Horz_Wheel_Spd_mph` (A0mV), `Rear_Horz_Wheel_Spd_mph` (A1mV)
