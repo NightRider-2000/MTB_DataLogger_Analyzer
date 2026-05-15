@@ -2,11 +2,12 @@ import tkinter as tk
 import numpy as np
 
 import widgets as w
-from constants import BG, DARK, GRID
+from constants import (BG, DARK, GRID, HIST_COLORS,
+                       SCATTER_ORIG_COLOR, TREND_ORIG_COLOR)
 
-_COMP_COLOR    = "#2a7be0"   # blue   – compression
-_REBOUND_COLOR = "#e05c2a"   # orange – rebound
-_SCATTER_COLOR = "#2ab55c"   # green  – scatter dots
+_COMP_COLOR    = HIST_COLORS[1]   # blue   – compression
+_REBOUND_COLOR = HIST_COLORS[0]   # orange – rebound
+_SCATTER_COLOR = HIST_COLORS[2]   # green  – scatter dots
 
 
 class SuspSpeedMixin:
@@ -73,12 +74,12 @@ class SuspSpeedMixin:
             bin_edges = np.linspace(0, bin_max, 201)
 
             if not comp.empty:
-                ax_hist.hist(comp_abs, bins=bin_edges, alpha=0.40, color=_COMP_COLOR,
+                ax_hist.hist(comp_abs, bins=bin_edges, alpha=0.45, color=_COMP_COLOR,
                              label=f"Compression  n={len(comp)}  mean={comp_abs.mean():.1f}")
                 ax_hist.axvline(comp_abs.mean(), color=_COMP_COLOR,
                                 linestyle="--", linewidth=1.2)
             if not rebound.empty:
-                ax_hist.hist(rebound, bins=bin_edges, alpha=0.40, color=_REBOUND_COLOR,
+                ax_hist.hist(rebound, bins=bin_edges, alpha=0.45, color=_REBOUND_COLOR,
                              label=f"Rebound  n={len(rebound)}  mean={rebound.mean():.1f}")
                 ax_hist.axvline(rebound.mean(), color=_REBOUND_COLOR,
                                 linestyle="--", linewidth=1.2)
@@ -177,9 +178,9 @@ class SuspSpeedMixin:
 
             if len(x_orig) > 1:
                 _plot_trend_and_bins(ax, x_orig, y_orig,
-                                     scatter_color="#888888",
-                                     trend_color="#555555",
-                                     bin_color="#555555",
+                                     scatter_color=SCATTER_ORIG_COLOR,
+                                     trend_color=TREND_ORIG_COLOR,
+                                     bin_color=TREND_ORIG_COLOR,
                                      scatter_label="Original",
                                      trend_label_prefix="Orig trend",
                                      bin_label_prefix="Orig")

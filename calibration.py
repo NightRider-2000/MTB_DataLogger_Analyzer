@@ -1,5 +1,6 @@
 import csv
 import tkinter as tk
+import warnings
 from tkinter import filedialog, messagebox
 
 import widgets as w
@@ -140,7 +141,7 @@ class CalibrationMixin:
             data  = calibrated.dropna()
             color = HIST_BAR_COLOR
             mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
-            self.ax_hist_cal.hist(data, bins=200, alpha=0.55, color=color)
+            self.ax_hist_cal.hist(data, bins=200, alpha=0.45, color=color)
             self.ax_hist_cal.axvline(mean, color=color, linestyle="--", linewidth=1.5)
             self.ax_hist_cal.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
             self.ax_hist_cal.axvline(mn,   color=color, linestyle="--", linewidth=1.5)
@@ -158,7 +159,9 @@ class CalibrationMixin:
         self.ax_hist_cal.set_ylabel("Count", color=DARK)
         w.style_ax(self.ax_hist_cal)
 
-        self.fig_cal.tight_layout()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.fig_cal.tight_layout()
         self.canvas_cal.draw()
 
     def save_current_calibration(self):

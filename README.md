@@ -4,13 +4,17 @@ A desktop application for loading, calibrating, and visualizing mountain bike su
 
 ## Features
 
-- **Import Data** — Load one or more OLA `.TXT` log files; view raw signal time series and histograms
+- **Device** — Connect to the Teensy MTB DAQ over USB; browse and download SD card files; live serial dashboard
+- **Select Data** — Load one or more OLA `.TXT` log files; view raw signal time series and histograms
 - **Bike Parameters** — Enter fork/shock travel, wheel circumference, spoke counts, head tube angle, and rear suspension motion ratio (editable table + CSV import/export)
-- **Calibration Parameters** — Map raw ADC signals to engineering units with a linear calibration; live preview updates on every keystroke; save/load calibration configs as CSV
-- **Sag** — Visualize dynamic sag for front and rear suspension, both wheel displacement and suspension stroke.
-- **Susp Speed** — Compression vs. rebound speed histograms (front and rear) plus a front vs. rear scatter plot with a 1:1 reference line and linear trend
+- **Signal Calibration** — Map raw ADC signals to engineering units with a linear calibration; live preview updates on every keystroke; save/load calibration configs as CSV
+- **IMU** — Attitude (pitch/roll), ISO accelerometer, and ISO gyro histograms; bike photo and board axis orientation diagram
+- **Sag** — Visualize dynamic sag for front and rear suspension, both wheel displacement and suspension stroke
+- **Susp Speed** — Compression vs. rebound speed histograms (front and rear) plus a front vs. rear scatter plot with dynamic wheelbase time-alignment, 1:1 reference line, and 20-bin mean ±1σ bands
 - **Time Series** — Three stacked, synchronized plots; zoom and pan controls; configurable signal selection per plot
-- **Free Plot** — Freely choose any two calibrated signals for an X–Y scatter or time series overlay
+- **Frequency** — Power spectral density of wheel position and vertical acceleration; peak frequency annotation
+- **Free Scatter** — Freely choose any two calibrated signals for an X–Y scatter with trend line and binned mean; optional colour axis
+- **Free Histogram** — Overlay up to four calibrated signals as histograms with per-signal stats annotation; 2D density mode (heat map) when a Y axis is selected
 
 ## Derived signals computed automatically
 
@@ -81,19 +85,23 @@ constants.py             — Colour palette and field definitions
 theme.py                 — ttk theme setup
 widgets.py               — Shared widget/figure factory functions
 file_manager.py          — File loading and signal list management
-calibration.py           — Calibration logic and derived signal computation
+plots.py                 — Raw signal time-series and histogram (Select Data tab)
+calibration.py           — Signal Calibration tab and derived signal computation
 bike_params.py           — Bike Parameters tab (motion ratio, geometry inputs)
+device.py                — Device tab (USB serial ↔ Teensy MTB DAQ)
+imu.py                   — IMU tab (attitude/accel/gyro histograms + axis diagram)
 sag.py                   — Sag tab
-susp_speed.py            — Suspension Speed tab
+susp_speed.py            — Susp Speed tab
 time_series.py           — Time Series tab
-free_plot.py             — Free Plot tab
-plots.py                 — Raw signal plotting helpers
+frequency.py             — Frequency tab (PSD)
+free_plot.py             — Free Scatter tab
+free_histogram.py        — Free Histogram tab
 __UserFiles/             — User-supplied config and image files
 ```
 
 ## Screenshots
 
-**Import Data** — Load one or more log files; browse raw signals and view histograms with mean/σ overlays.
+**Select Data** — Load one or more log files; browse raw signals and view histograms with mean/σ overlays.
 
 ![](__UserFiles/ScreenShots/Screenshot%202026-03-07%20at%2012.43.28%20PM.png)
 
@@ -109,7 +117,7 @@ __UserFiles/             — User-supplied config and image files
 
 ![](__UserFiles/ScreenShots/Screenshot%202026-03-07%20at%202.49.18%20PM.png)
 
-**Calibration Parameters** — Map raw ADC counts to engineering units with live plot preview.
+**Signal Calibration** — Map raw ADC counts to engineering units with live plot preview.
 
 ![](__UserFiles/ScreenShots/Screenshot%202026-03-07%20at%203.04.27%20PM.png)
 

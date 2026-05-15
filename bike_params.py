@@ -2,6 +2,7 @@ import csv
 import math
 import os
 import tkinter as tk
+import warnings
 from tkinter import filedialog, ttk
 from PIL import Image, ImageTk
 
@@ -338,7 +339,9 @@ class BikeParamsMixin:
             spine.set_edgecolor(DARK)
         ax.grid(True, color=GRID, linewidth=0.5, linestyle="-")
         ax.set_axisbelow(True)
-        self._fig_mr.tight_layout()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self._fig_mr.tight_layout()
         self._canvas_mr.draw()
         if hasattr(self, "cal_result_df") and self.cal_result_df is not None:
             self._apply_all_calibrations()

@@ -7,14 +7,11 @@ from matplotlib.lines import Line2D
 from PIL import Image, ImageTk
 
 import widgets as w
-from constants import BG, DARK, HIST_COLORS
+from constants import BG, DARK, HIST_COLORS, WORLD_AXIS_COLOR, BOARD_AXIS_COLOR
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _BIKE_IMG  = os.path.join(_DIR, "__UserFiles", "Bike_Picture.jpeg")
 _BOARD_IMG = os.path.join(_DIR, "__UserFiles", "Board_Picture.png")
-
-_WORLD_COLOR = "#4488ff"   # blue — ISO world-frame axes
-_BOARD_COLOR = "#111111"   # near-black — board-frame axes
 
 # Fixed signal groups — each row becomes a histogram panel
 _GROUPS = [
@@ -126,27 +123,27 @@ class ImuMixin:
                         length_includes_head=True, zorder=3)
 
         # Board axes — black
-        ax.arrow(0, 0, bx[0]*L, bx[1]*L, fc=_BOARD_COLOR, ec=_BOARD_COLOR, **arrow_kw)
-        ax.arrow(0, 0, by[0]*L, by[1]*L, fc=_BOARD_COLOR, ec=_BOARD_COLOR, **arrow_kw)
+        ax.arrow(0, 0, bx[0]*L, bx[1]*L, fc=BOARD_AXIS_COLOR, ec=BOARD_AXIS_COLOR, **arrow_kw)
+        ax.arrow(0, 0, by[0]*L, by[1]*L, fc=BOARD_AXIS_COLOR, ec=BOARD_AXIS_COLOR, **arrow_kw)
 
         # World axes — blue
-        ax.arrow(0, 0, wx[0]*L, wx[1]*L, fc=_WORLD_COLOR, ec=_WORLD_COLOR, **arrow_kw)
-        ax.arrow(0, 0, wz[0]*L, wz[1]*L, fc=_WORLD_COLOR, ec=_WORLD_COLOR, **arrow_kw)
+        ax.arrow(0, 0, wx[0]*L, wx[1]*L, fc=WORLD_AXIS_COLOR, ec=WORLD_AXIS_COLOR, **arrow_kw)
+        ax.arrow(0, 0, wz[0]*L, wz[1]*L, fc=WORLD_AXIS_COLOR, ec=WORLD_AXIS_COLOR, **arrow_kw)
 
         # Labels — placed beyond arrow tip, anchored away from arrow body
         lpad = 0.15
         # Board X: arrow goes lower-left in display; label below tip
         ax.text(bx[0]*(L+lpad), bx[1]*(L+lpad), "Board X",
-                color=_BOARD_COLOR, fontsize=8, ha="center", va="top", fontweight="bold")
+                color=BOARD_AXIS_COLOR, fontsize=8, ha="center", va="top", fontweight="bold")
         # Board Y: arrow goes upper-left in display; label above tip
         ax.text(by[0]*(L+lpad), by[1]*(L+lpad), "Board Y",
-                color=_BOARD_COLOR, fontsize=8, ha="center", va="bottom", fontweight="bold")
+                color=BOARD_AXIS_COLOR, fontsize=8, ha="center", va="bottom", fontweight="bold")
         # Fwd (X): arrow goes horizontally left; label above tip (clear of Board Y)
         ax.text(wx[0]*L, wx[1]*L + 0.14, "Fwd (X)",
-                color=_WORLD_COLOR, fontsize=8, ha="center", va="bottom", fontweight="bold")
+                color=WORLD_AXIS_COLOR, fontsize=8, ha="center", va="bottom", fontweight="bold")
         # Up (Z): arrow goes straight up; label centered above tip (x=0 = center of display)
         ax.text(0, wz[1]*L + 0.05, "Up (Z)",
-                color=_WORLD_COLOR, fontsize=8, ha="center", va="bottom", fontweight="bold")
+                color=WORLD_AXIS_COLOR, fontsize=8, ha="center", va="bottom", fontweight="bold")
 
         # Arc between world Fwd (0°) and Board Y (theta above horizontal)
         arc_r = 0.28
@@ -175,8 +172,8 @@ class ImuMixin:
 
         # Legend
         handles = [
-            Line2D([0], [0], color=_BOARD_COLOR, lw=2, label="Board frame"),
-            Line2D([0], [0], color=_WORLD_COLOR, lw=2, label="ISO world frame"),
+            Line2D([0], [0], color=BOARD_AXIS_COLOR, lw=2, label="Board frame"),
+            Line2D([0], [0], color=WORLD_AXIS_COLOR, lw=2, label="ISO world frame"),
         ]
         ax.legend(handles=handles, fontsize=6, facecolor=BG, edgecolor=DARK,
                   labelcolor=DARK, loc="lower right")

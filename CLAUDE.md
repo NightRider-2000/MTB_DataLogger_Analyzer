@@ -39,7 +39,7 @@ MTB_DataLog_Analyze.py — MountainBikeApp + __main__
 - Class: `MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, tk.Tk)`
 - ttk theme: `clam` (required on macOS — Aqua ignores button bg colours)
 - Window width: `self.winfo_screenwidth()` (full screen width), height 700
-- Tab order: Device, Import Data, Bike Parameters, Calibration Parameters, IMU, Sag, Susp Speed, Time Series, Frequency, Free Scatter, Free Histogram (Device first so connection is the entry point)
+- Tab order: Device, Select Data, Bike Parameters, Signal Calibration, IMU, Sag, Susp Speed, Time Series, Frequency, Free Scatter, Free Histogram (Device first so connection is the entry point)
 
 ## Key Patterns
 - Widget factories in `widgets.py`: `make_btn`, `make_entry`, `make_listbox`, `make_figure`, `make_canvas`, `style_ax`
@@ -48,6 +48,103 @@ MTB_DataLog_Analyze.py — MountainBikeApp + __main__
 - `layout="constrained"` on `fig_hist`
 - `insert_gap_nans(data, max_gap_s=1.0)` in widgets.py — inserts NaN rows at >1s gaps to break plot lines
 - `autofill=False` when calling `_update_cal_plots` from treeview select
+
+## Plotting Standards
+
+### Figure & Canvas
+- Create figures with `w.make_figure(figsize=..., dpi=100)` — sets `fig.patch.set_facecolor(BG)` automatically
+- Create canvases with `w.make_canvas(fig, parent)` — sets widget `width=1, height=1` to let grid control size
+- After `add_subplot`: always set `ax.set_facecolor(BG)`
+- When redrawing: `ax.clear()` then `ax.set_facecolor(BG)` before any plot calls
+- Always call `w.style_ax(ax)` as the last step before `canvas.draw()` — applies tick/spine colors and grid
+- Layout: always `tight_layout()` wrapped in `warnings.catch_warnings()` + `warnings.simplefilter("ignore")`. Use explicit `fig.subplots_adjust(...)` only when stacked figures must share a locked x-axis (e.g., Time Series tab)
+
+### Colors
+- All plot text (titles, axis labels, tick labels, legend text, annotation text): `DARK`
+- Figure and axes backgrounds: `BG`
+- Grid lines (via `style_ax`): `GRID`, `linewidth=0.7`, `linestyle="-"`, `set_axisbelow(True)`
+- Multi-signal coloring: `HIST_COLORS[i % len(HIST_COLORS)]`
+- **All plot-specific semantic colors must live in `constants.py`** — no inline hex strings or module-level color constants in individual plot files
+
+### Font Sizes
+| Element | Standard panel | Compact subplot |
+|---|---|---|
+| Title | `fontsize=9` | `fontsize=8` |
+| Axis label | `fontsize=8` | `fontsize=7` |
+| Legend | `fontsize=7`–`8` | `fontsize=7` |
+| Annotation/stats text | `fontsize=7` | `fontsize=7` |
+| Row/figure label | `fontsize=10`, `fontweight="bold"` | — |
+
+### Legend
+Always use: `fontsize=7` (dense/small) or `fontsize=8` (full-size panels), `facecolor=BG, edgecolor=DARK, labelcolor=DARK`
+
+### Histograms
+- Bins: `200` for standard histograms; `120` for compact multi-signal panels (IMU)
+- Alpha: **0.45** for all histogram bars
+- Vertical lines: mean `linestyle="--" linewidth=1.5`; median `linestyle=":" linewidth=1.5`; min/max `linestyle="--" linewidth=1.5`; std span `alpha=0.12`
+- Stats annotation (mean/median/std/min/max): required on all histograms **except** IMU group histograms
+  - Position: `(0.97, 0.97)`, `va="top"`, `ha="right"`, `transform=ax.transAxes`
+  - Style: `fontsize=7`, `color=DARK`, `bbox=dict(boxstyle="round,pad=0.4", facecolor=BG, edgecolor=GRID, alpha=0.9)`
+  - Format: `f"{col}\n  mean={mean:.4g}\n  med ={med:.4g}\n  std ={std:.4g}\n  min ={mn:.4g}\n  max ={mx:.4g}"`
+
+### Time Series Plots
+- Always call `w.insert_gap_nans(series)` before plotting
+- Sparse signals (>50% NaN after gap insertion): dots — `marker="."`, `markersize=3`, `linestyle="none"`
+- Dense signals: line plot via `.plot(ax=ax, ...)`
+
+### Scatter Plots
+- Points: `s=8`, `alpha=0.5`, `linewidths=0`
+- Trend line: `TREND_COLOR` (from `constants.py`), `linewidth=1.8`, `linestyle="--"`
+- Bin mean line: `BIN_MEAN_COLOR` (from `constants.py`), `linewidth=2.0`, `marker="o"`, `markersize=5`
+- ±1σ fill: `alpha=0.20`
+- Use 20 bins across the x range for binned statistics
+
+### 2D Histograms & Colormapped Scatter
+- `hist2d`: `bins=100`, `cmap="hot"`
+- Scatter with color axis: `cmap="plasma"`, `s=8`, `alpha=0.5`, `linewidths=0`
+- Colorbars: `set_label(..., color=DARK)`; tick params `color=DARK`; all tick labels `.set_color(DARK)`
+
+### PSD / Frequency Plots
+- Lines: `linewidth=1.2`
+- Peak frequency annotations: `fontsize=7`, `va="bottom"`
+
+---
+
+## Widget & Text Standards
+
+### Buttons
+- Always use `w.make_btn(parent, text, command)` — renders `ttk.Button` with `style="Dark.TButton"`
+- Never construct a `ttk.Button` directly or set style/colors inline; new button variants go in `theme.py`
+- **Visual spec** (defined in `theme.py` → `setup_theme`):
+  - Normal: `background=DARK` (`#1b3a6b`), `foreground=BTN_FG` (`#ffffff`)
+  - Hover/active: background `#2a5298`
+  - Disabled: background `FIELD` (`#a8b2bc`), foreground unchanged
+  - Padding: `[8, 4]` (horizontal, vertical); `borderwidth=0`, `relief="flat"`, `focusthickness=0`
+- **Enabling / disabling** — call `.configure(state=tk.NORMAL)` or `.configure(state=tk.DISABLED)` on the saved reference; the `FIELD` background is applied automatically by the ttk style map
+- **Toggle-text buttons** (e.g. Connect/Disconnect) — save the reference, call `.configure(text="...")` to relabel in-place; do not destroy and recreate
+- Pack with `padx=2` inside a toolbar row; `padx=5` in top-of-tab button bars; `padx=6` for connection controls
+
+### Entry Fields
+- Always use `w.make_entry(parent, width=N)` — applies `bg=FIELD`, `fg=DARK`, flat relief, dark border highlight
+
+### Listboxes
+- Always use `w.make_listbox(parent, selectmode=...)` — standardizes colors, selection highlight, and border
+
+### Comboboxes
+- Standard width: `22`; always `state="readonly"`
+- Bind `<<ComboboxSelected>>` for reactive updates
+
+### Labels
+- Standard: `bg=BG, fg=DARK`
+- Helper/hint text: `fg=GRID`, `font=("TkDefaultFont", 8)`, `justify="left"`
+- Color-dot indicators: `text="●"`, `fg=HIST_COLORS[i]`, `font=("", 11)`
+
+### Separators
+- Horizontal rule: `tk.Frame(parent, bg=GRID, height=1)` with `.pack(fill=tk.X, pady=(N, 0))`
+
+### Frames
+- Always set `bg=BG` — never leave the default gray Tkinter background
+- Use `tk.Frame` for structural containers; `ttk.Frame` only when ttk theme inheritance is required
 
 ## Device Tab (device.py — DeviceMixin)
 - Connection bar: Port dropdown, Refresh Ports, Baud combobox (default 115200; locked while connected), Connect/Disconnect

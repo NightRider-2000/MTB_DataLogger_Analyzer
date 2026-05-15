@@ -62,7 +62,7 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
         self._build_device_tab()
 
         self.signals_tab = tk.Frame(nb, bg=BG)
-        nb.add(self.signals_tab, text="Import Data")
+        nb.add(self.signals_tab, text="Select Data")
         self._build_import_tab()
 
         self.bike_params_tab = tk.Frame(nb, bg=BG)
@@ -70,7 +70,7 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
         self._build_bike_params_tab()
 
         self.calibration_tab = tk.Frame(nb, bg=BG)
-        nb.add(self.calibration_tab, text="Calibration Parameters")
+        nb.add(self.calibration_tab, text="Signal Calibration")
         self._build_calibration_tab()
 
         self.imu_tab = tk.Frame(nb, bg=BG)

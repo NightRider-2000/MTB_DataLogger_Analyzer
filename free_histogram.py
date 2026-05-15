@@ -1,10 +1,9 @@
 import tkinter as tk
+import warnings
 from tkinter import ttk
 
 import widgets as w
-from constants import BG, DARK, GRID
-
-_COLORS = ["#4c9be8", "#e8844c", "#4ce87a", "#e8e04c"]
+from constants import BG, DARK, GRID, HIST_COLORS
 
 
 class FreeHistogramMixin:
@@ -115,18 +114,34 @@ class FreeHistogramMixin:
         else:
             # ── 1D overlay histogram mode ─────────────────────────────────────
             plotted = False
-            for i, (var, color) in enumerate(zip(self.fh_sig_vars, _COLORS)):
+            stats_lines = []
+            for i, (var, color) in enumerate(zip(self.fh_sig_vars, HIST_COLORS)):
                 col = var.get()
                 if not col or col not in self.cal_result_df.columns:
                     continue
                 data = self.cal_result_df[col].dropna()
                 if data.empty:
                     continue
+                mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
                 self.ax_fh.hist(data.values.astype(float), bins=200,
-                                alpha=0.50, color=color, label=col)
+                                alpha=0.45, color=color, label=col)
+                self.ax_fh.axvline(mean, color=color, linestyle="--", linewidth=1.5)
+                self.ax_fh.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
+                self.ax_fh.axvline(mn,   color=color, linestyle="--", linewidth=1.5)
+                self.ax_fh.axvline(mx,   color=color, linestyle="--", linewidth=1.5)
+                self.ax_fh.axvspan(mean - std, mean + std, alpha=0.12, color=color)
+                stats_lines.append(
+                    f"{col}\n  mean={mean:.4g}\n  med ={med:.4g}\n  std ={std:.4g}\n  min ={mn:.4g}\n  max ={mx:.4g}"
+                )
                 plotted = True
 
             if plotted:
+                self.ax_fh.text(
+                    0.97, 0.97, "\n\n".join(stats_lines),
+                    transform=self.ax_fh.transAxes, fontsize=7,
+                    verticalalignment="top", horizontalalignment="right", color=DARK,
+                    bbox=dict(boxstyle="round,pad=0.4", facecolor=BG, edgecolor=GRID, alpha=0.9),
+                )
                 handles, _ = self.ax_fh.get_legend_handles_labels()
                 if handles:
                     self.ax_fh.legend(fontsize=8, facecolor=BG,
@@ -136,5 +151,7 @@ class FreeHistogramMixin:
                 self.ax_fh.set_title("Histogram", color=DARK)
 
         w.style_ax(self.ax_fh)
-        self.fig_fh.tight_layout()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.fig_fh.tight_layout()
         self.canvas_fh.draw()

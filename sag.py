@@ -1,4 +1,5 @@
 import tkinter as tk
+import warnings
 
 import widgets as w
 from constants import BG, DARK, GRID, HIST_BAR_COLOR
@@ -51,7 +52,9 @@ class SagMixin:
         for ax in self.axes_sag.flat:
             w.style_ax(ax)
 
-        self.fig_sag.tight_layout(rect=[0.03, 0, 1, 1])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.fig_sag.tight_layout(rect=[0.03, 0, 1, 1])
         self.canvas_sag.draw()
 
 
@@ -66,7 +69,7 @@ def _sag_plot(ax, df, col, zoom_p90=False):
     import numpy as np
     color = HIST_BAR_COLOR
     mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
-    counts, bin_edges, _ = ax.hist(data, bins=200, alpha=0.55, color=color)
+    counts, bin_edges, _ = ax.hist(data, bins=200, alpha=0.45, color=color)
     ax.axvline(mean, color=color, linestyle="--", linewidth=1.5)
     ax.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
     ax.axvline(mn,   color=color, linestyle="--", linewidth=1.5)

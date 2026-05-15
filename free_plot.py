@@ -1,10 +1,11 @@
 import tkinter as tk
+import warnings
 from tkinter import ttk
 
 import numpy as np
 
 import widgets as w
-from constants import BG, DARK, GRID
+from constants import BG, DARK, GRID, TREND_COLOR, BIN_MEAN_COLOR
 
 
 class FreePlotMixin:
@@ -112,7 +113,7 @@ class FreePlotMixin:
             sign = "+" if b >= 0 else "-"
             eq_label = f"y = {m:.3g}x {sign} {abs(b):.3g}   R²={r2:.3f}"
             self.ax_fp.plot(x_line, m * x_line + b,
-                            color="#e05c2a", linewidth=1.8,
+                            color=TREND_COLOR, linewidth=1.8,
                             linestyle="--", label=eq_label, zorder=5)
 
         # ── Binned mean ± std (20 bins across x range) ───────────────────────
@@ -129,15 +130,17 @@ class FreePlotMixin:
                 bc = np.array(bin_centers)
                 bm = np.array(bin_means)
                 bs = np.array(bin_stds)
-                self.ax_fp.plot(bc, bm, color="#2a7be0", linewidth=2.0,
+                self.ax_fp.plot(bc, bm, color=BIN_MEAN_COLOR, linewidth=2.0,
                                 marker="o", markersize=5, label="Bin mean", zorder=6)
                 self.ax_fp.fill_between(bc, bm - bs, bm + bs,
-                                        alpha=0.20, color="#2a7be0", label="±1σ")
+                                        alpha=0.20, color=BIN_MEAN_COLOR, label="±1σ")
 
         self.ax_fp.legend(fontsize=8, facecolor=BG, edgecolor=DARK, labelcolor=DARK)
         self.ax_fp.set_xlabel(x_col, color=DARK)
         self.ax_fp.set_ylabel(y_col, color=DARK)
         self.ax_fp.set_title(f"{y_col} vs {x_col}", color=DARK)
         w.style_ax(self.ax_fp)
-        self.fig_fp.tight_layout()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.fig_fp.tight_layout()
         self.canvas_fp.draw()

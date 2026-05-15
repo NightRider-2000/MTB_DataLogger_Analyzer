@@ -1,3 +1,5 @@
+import warnings
+
 import widgets as w
 from constants import BG, DARK, HIST_BAR_COLOR, GRID
 
@@ -34,7 +36,9 @@ class PlotsMixin:
         self.ax.set_ylabel("Value", color=DARK)
         w.style_ax(self.ax)
         self.fig.autofmt_xdate()
-        self.fig.tight_layout()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.fig.tight_layout()
         self.canvas.draw()
 
     def plot_histogram(self, columns):
@@ -51,7 +55,7 @@ class PlotsMixin:
             color = HIST_BAR_COLOR
             data  = self.df[col].dropna()
             mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
-            self.ax_hist.hist(data, bins=200, alpha=0.55, color=color, label=col)
+            self.ax_hist.hist(data, bins=200, alpha=0.45, color=color, label=col)
             self.ax_hist.axvline(mean, color=color, linestyle="--", linewidth=1.5)
             self.ax_hist.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
             self.ax_hist.axvline(mn,   color=color, linestyle="--", linewidth=1.5)
