@@ -1,6 +1,7 @@
 import matplotlib
 matplotlib.use("TkAgg")
 
+import time
 import tkinter as tk
 from tkinter import ttk
 
@@ -11,8 +12,20 @@ from matplotlib.figure import Figure
 from constants import BG, DARK, FIELD, BTN_FG, GRID
 
 
-def make_btn(parent, text, command):
-    return ttk.Button(parent, text=text, command=command, style="Dark.TButton")
+def make_btn(parent, text, command, style="Dark.TButton"):
+    return ttk.Button(parent, text=text, command=command, style=style)
+
+
+def enable_gridlines(tree):
+    """RULE: call on every ttk.Treeview after its columns are configured.
+    Turns on Tk 9 native column separators (vertical grey cell borders); the
+    horizontal rules come from the shared Row layout in theme.py. No-op on
+    pre-9 Tk."""
+    try:
+        for cid in tree["columns"]:
+            tree.column(cid, separator=True)
+    except tk.TclError:
+        pass
 
 
 def make_entry(parent, width=10):
@@ -50,6 +63,23 @@ def make_canvas(fig, parent):
     return canvas, widget
 
 
+def sample_period_s(index):
+    """Median sample period (seconds) of a DatetimeIndex, or None if undeterminable.
+    The logger runs at a fixed rate (currently 240 Hz) but the rate is NEVER
+    hardcoded — always derive it from the loaded data's time index."""
+    if not isinstance(index, pd.DatetimeIndex) or len(index) < 2:
+        return None
+    dt  = index.to_series().diff().dt.total_seconds()
+    med = dt[dt > 0].median()
+    return float(med) if med and med > 0 else None
+
+
+def sample_rate_hz(index):
+    """Median sample rate (Hz) of a DatetimeIndex, or None if undeterminable."""
+    p = sample_period_s(index)
+    return (1.0 / p) if p else None
+
+
 def insert_gap_nans(data, max_gap_s=1.0):
     """Insert NaN rows where the DatetimeIndex gap exceeds max_gap_s seconds.
     Accepts a DataFrame or Series. Non-datetime indexes are returned unchanged."""
@@ -68,6 +98,103 @@ def insert_gap_nans(data, max_gap_s=1.0):
                             index=gap_idx - pd.Timedelta(nanoseconds=1),
                             columns=data.columns)
     return pd.concat([data, nans]).sort_index()
+
+
+class ProgressDialog:
+    """Modal 'please wait' window for a long-running, step-based operation
+    (CSV import, the full calibration cascade). Shows a determinate progress
+    bar, a status label naming the current step, and a live elapsed/estimated-
+    remaining time readout.
+
+    Tk is single-threaded: the caller must do the actual work in a sequence
+    of chunks (one CSV file, one calibration stage) and call .step(...) after
+    each chunk completes — that call both updates the bar and pumps Tk's
+    event loop so the window repaints and the app doesn't look frozen. Don't
+    call this from inside a single giant blocking call; break the work up.
+    """
+
+    def __init__(self, parent, title="Please wait…"):
+        self.win = tk.Toplevel(parent)
+        self.win.title(title)
+        self.win.configure(bg=BG)
+        self.win.transient(parent)
+        self.win.resizable(False, False)
+        self.win.protocol("WM_DELETE_WINDOW", lambda: None)   # no close button
+        self.label = tk.Label(self.win, text=title, bg=BG, fg=DARK,
+                              anchor="w", width=44)
+        self.label.pack(padx=16, pady=(16, 6), fill=tk.X)
+        self.bar = ttk.Progressbar(self.win, mode="determinate",
+                                   maximum=100, length=340)
+        self.bar.pack(padx=16, pady=(0, 6))
+        self.time_label = tk.Label(self.win, text="", bg=BG, fg=DARK, anchor="w")
+        self.time_label.pack(padx=16, pady=(0, 16), fill=tk.X)
+
+        self.win.update_idletasks()
+        px = parent.winfo_rootx() + (parent.winfo_width() - self.win.winfo_width()) // 2
+        py = parent.winfo_rooty() + (parent.winfo_height() - self.win.winfo_height()) // 3
+        self.win.geometry(f"+{max(px, 0)}+{max(py, 0)}")
+        self.win.grab_set()   # modal — block interaction with the rest of the app
+
+        self._t0 = time.monotonic()
+        self.win.update()
+
+    def step(self, label, frac):
+        """Advance the bar to ``frac`` (0..1) and show ``label`` as the
+        current step. Call after each chunk of work completes."""
+        self.label.configure(text=label)
+        self.bar["value"] = max(0.0, min(1.0, frac)) * 100
+        elapsed = time.monotonic() - self._t0
+        if 0 < frac < 1:
+            remaining = elapsed * (1 - frac) / frac
+            self.time_label.configure(
+                text=f"{elapsed:.1f}s elapsed  •  ~{remaining:.1f}s remaining")
+        else:
+            self.time_label.configure(text=f"{elapsed:.1f}s elapsed")
+        self.win.update()   # repaint + pump events so the UI stays live
+
+    def close(self):
+        self.win.grab_release()
+        self.win.destroy()
+
+
+def plot_time_series_smart(ax, series, color=None, label=None):
+    """Plot a time-indexed Series using the project's sparse-signal convention:
+    if it's >50% NaN after gap insertion (GPS fixes, trigger-driven wheel
+    speed, etc.), draw dots (linestyle="none", marker=".", markersize=3) —
+    a connected line across mostly-missing data is either invisible (no two
+    valid samples are ever adjacent) or misleadingly implies continuity.
+    Dense signals get a normal connected line. Always call this rather than
+    a bare .plot()/ax.plot() wherever a raw or calibrated time-domain signal
+    might be sparse."""
+    gapped = insert_gap_nans(series)
+    sparse = gapped.dropna()
+    nan_frac = 1 - len(sparse) / max(len(gapped), 1)
+    if nan_frac > 0.5:
+        ax.plot(sparse.index, sparse.values, color=color, label=label,
+                linestyle="none", marker=".", markersize=3)
+    else:
+        ax.plot(gapped.index, gapped.values, color=color, label=label)
+
+
+def format_time_axis(ax):
+    """RULE: call on every x-axis whose ticks represent time-of-day (a real
+    datetime axis — a pandas DatetimeIndex plotted directly, e.g. via
+    plot_time_series_smart). Tick labels are always HH:MM:SS.mmm — NEVER
+    day/month/year — overriding matplotlib's default date locator/formatter,
+    which otherwise shows a date once the axis is zoomed out far enough.
+    Do NOT call this on non-time axes (histograms, free-scatter plots of two
+    arbitrary signals, frequency/PSD plots, etc.) — those aren't time axes
+    and this would just print garbage tick labels."""
+    import matplotlib.dates as mdates
+    from matplotlib.ticker import FuncFormatter
+
+    def _fmt(x, _pos):
+        try:
+            dt = mdates.num2date(x)
+            return f"{dt:%H:%M:%S}.{dt.microsecond // 1000:03d}"
+        except Exception:
+            return ""
+    ax.xaxis.set_major_formatter(FuncFormatter(_fmt))
 
 
 def style_ax(ax):

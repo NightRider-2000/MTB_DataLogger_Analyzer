@@ -16,12 +16,14 @@ Python/Tkinter desktop application for analyzing MTB data logger CSV files.
 ```
 constants.py      — palette + CAL_FIELDS + HIST_COLORS
 theme.py          — setup_theme(root)
-widgets.py        — make_btn, make_entry, make_listbox, make_figure, make_canvas, style_ax, insert_gap_nans
-file_manager.py   — FileManagerMixin
-plots.py          — PlotsMixin
-calibration.py    — CalibrationMixin
-imu.py            — ImuMixin: IMU tab (histograms + bike/board images + axis diagram)
-frequency.py      — FrequencyMixin
+widgets.py        — make_btn, make_entry, make_listbox, make_figure, make_canvas, style_ax, insert_gap_nans, plot_time_series_smart (sparse-signal dots vs. dense line — see Time Series Plots standard), enable_gridlines (table cell borders — see Tables rule), ProgressDialog (modal wait window w/ progress bar + ETA — see Performance section)
+file_manager.py   — FileManagerMixin: Select Data tab folder browser — a 2-column Treeview (Name + Size in MB) that descends into dirs (⬆ Up button), .csv loading, date-from-filename, and #CFG header-block parsing (`_parse_log_header` → auto fork/shock calibration)
+plots.py          — PlotsMixin: Select Data tab's quick-glance time series + histogram. An all-NaN selected signal (e.g. `power_w` with no BLE meter) shows "No Data Available" text instead of an empty plot; the time-series x-axis is always pinned to the real ride time range (`self.df.index.min()/.max()`) rather than matplotlib's default 0..1 axis, which otherwise renders as garbled dates when nothing is plotted. Plots each selected column via `w.plot_time_series_smart` (not a bulk `DataFrame.plot()`) so sparse raw signals (GPS, wheel speed) render as dots — see Time Series Plots standard
+calibration.py    — CalibrationMixin. `_update_cal_plots`'s three preview panels (raw, calibrated, calibrated histogram) follow the same standards as `plots.py`: `w.plot_time_series_smart` (sparse-signal dots), x-axis pinned to `self.df.index.min()/.max()`, and "No Data Available" text when the signal/calibration result is all-NaN — see Time Series Plots standard
+imu.py            — ImuMixin: IMU tab (histograms + bike picture + axis diagram). No board picture — removed 2026-07 (SparkFun board no longer used); the axis diagram now takes the full width of that row and self-centers via `set_aspect("equal")`
+gps.py            — GpsMixin: GPS tab (satellite route map + colored time-range bar + global time filter)
+basemap.py        — Esri World Imagery + Terrarium DEM XYZ tile fetch/stitch (stdlib urllib + pillow); Web-Mercator helpers
+frequency.py      — FrequencyMixin: PSD tab, opt-in via a button (not run automatically — see Performance section)
 time_series.py    — TimeSeriesMixin
 susp_speed.py     — SuspSpeedMixin
 free_plot.py      — FreePlotMixin
@@ -33,18 +35,20 @@ MTB_DataLog_Analyze.py — MountainBikeApp + __main__
 
 ## Dependencies
 - `pyserial` — required for the Device tab (USB serial to Teensy). Install in venv: `pip install pyserial`
-- `matplotlib`, `pandas`, `numpy`, `pillow` — standard data/plot stack
+- `scipy` — Savitzky-Golay suspension velocity (`scipy.signal.savgol_filter`) and quaternion→Euler attitude (`scipy.spatial.transform.Rotation`). Install in venv: `pip install scipy`
+- `matplotlib`, `pandas`, `numpy`, `pillow` — standard data/plot stack (`pillow` also stitches satellite tiles for the GPS tab)
+- GPS tab satellite imagery + topo contours need internet for the first fetch (Esri World Imagery + Terrarium DEM tiles, then disk-cached); no extra pip package — tiles come via stdlib `urllib`. Offline → plain lon/lat map with no contours.
 
 ## Architecture
 - Class: `MountainBikeApp(FileManagerMixin, PlotsMixin, CalibrationMixin, tk.Tk)`
 - ttk theme: `clam` (required on macOS — Aqua ignores button bg colours)
-- Window width: `self.winfo_screenwidth()` (full screen width), height 700
-- Tab order: Device, Select Data, Bike Parameters, Signal Calibration, IMU, Sag, Susp Speed, Time Series, Frequency, Free Scatter, Free Histogram (Device first so connection is the entry point)
+- Window: launches **full-screen** via `self.attributes("-fullscreen", True)` (geometry also set to `screen_w × screen_h` as a fallback). **Esc** exits full-screen so the user is never trapped without a title bar
+- Tab order: Device, Select Data, Bike Parameters, Signal Calibration, **GPS**, IMU, Sag, Susp Speed, Time Series, Frequency, Free Scatter, Free Histogram (Device first so connection is the entry point; GPS sits between the config tabs and the analysis tabs)
 
 ## Key Patterns
 - Widget factories in `widgets.py`: `make_btn`, `make_entry`, `make_listbox`, `make_figure`, `make_canvas`, `style_ax`
 - Canvas widgets: `width=1, height=1` to let grid control size
-- NavigationToolbar wrapped in frame (toolbar internally calls pack)
+- Select Data tab's preview plots (`_build_plots_panel`) intentionally have **no `NavigationToolbar2Tk`** (removed 2026-07) — it's a quick-glance time-series + histogram, not an interactive analysis plot; don't re-add a toolbar there
 - `layout="constrained"` on `fig_hist`
 - `insert_gap_nans(data, max_gap_s=1.0)` in widgets.py — inserts NaN rows at >1s gaps to break plot lines
 - `autofill=False` when calling `_update_cal_plots` from treeview select
@@ -67,13 +71,15 @@ MTB_DataLog_Analyze.py — MountainBikeApp + __main__
 - **All plot-specific semantic colors must live in `constants.py`** — no inline hex strings or module-level color constants in individual plot files
 
 ### Font Sizes
-| Element | Standard panel | Compact subplot |
+**Global scale + offset:** all UI/plot text is sized as `round(base × FONT_SCALE) + FONT_DELTA` (`constants.py`: `FONT_SCALE = 1.7`, `FONT_DELTA = -2`). The `-2` is a global point trim applied on top of the scale. It is applied three ways: Tk named fonts in `theme._scale_named_fonts` (`round(size*FONT_SCALE)+FONT_DELTA`), matplotlib `rcParams["font.size"]` at the top of `MTB_DataLog_Analyze.py` (`*FONT_SCALE+FONT_DELTA`; relative sizes cascade), and the explicit `fontsize=` / `font=(…)` literals are baked at the final value in the source. The table below lists the **base** (pre-scale) design sizes — the literals in code are `round(base×FONT_SCALE)+FONT_DELTA` (e.g. base 9 → `round(15.3)−2 = fontsize=13`). To retune everything: change `FONT_SCALE`/`FONT_DELTA`, then re-bake every literal (`fontsize=` and Tk `font=(…)` tuples) to the new value.
+
+| Element | Standard panel (base) | Compact subplot (base) |
 |---|---|---|
-| Title | `fontsize=9` | `fontsize=8` |
-| Axis label | `fontsize=8` | `fontsize=7` |
-| Legend | `fontsize=7`–`8` | `fontsize=7` |
-| Annotation/stats text | `fontsize=7` | `fontsize=7` |
-| Row/figure label | `fontsize=10`, `fontweight="bold"` | — |
+| Title | `9` | `8` |
+| Axis label | `8` | `7` |
+| Legend | `7`–`8` | `7` |
+| Annotation/stats text | `7` | `7` |
+| Row/figure label | `10`, `fontweight="bold"` | — |
 
 ### Legend
 Always use: `fontsize=7` (dense/small) or `fontsize=8` (full-size panels), `facecolor=BG, edgecolor=DARK, labelcolor=DARK`
@@ -88,9 +94,8 @@ Always use: `fontsize=7` (dense/small) or `fontsize=8` (full-size panels), `face
   - Format: `f"{col}\n  mean={mean:.4g}\n  med ={med:.4g}\n  std ={std:.4g}\n  min ={mn:.4g}\n  max ={mx:.4g}"`
 
 ### Time Series Plots
-- Always call `w.insert_gap_nans(series)` before plotting
-- Sparse signals (>50% NaN after gap insertion): dots — `marker="."`, `markersize=3`, `linestyle="none"`
-- Dense signals: line plot via `.plot(ax=ax, ...)`
+- **Always plot via `w.plot_time_series_smart(ax, series, color=..., label=...)`** (widgets.py) — never a bare `.plot()`/`ax.plot()` call for a raw or calibrated time-domain signal. It calls `insert_gap_nans` internally, then: sparse signals (>50% NaN after gap insertion — GPS fixes, trigger-driven wheel speed, etc.) get dots (`marker="."`, `markersize=3`, `linestyle="none"`); dense signals get a normal connected line. **A connected line across mostly-missing data is either invisible (no two valid samples are ever adjacent) or misleadingly continuous** — this was a real bug (2026-07): the Select Data tab's raw preview (`plots.py plot_signals`) used a bare `DataFrame.plot()` with no sparse handling, so GPS (~99% NaN — only present once a fix is acquired) rendered as nothing and trigger-driven wheel speed (~90% NaN) rendered as disconnected, easy-to-miss fragments instead of a visible dot cloud. `time_series.py` already had the correct per-column logic inline; it's now the shared implementation both tabs call.
+- **RULE — time-axis tick labels are always `HH:MM:SS.mmm`, never day/month/year:** call `w.format_time_axis(ax)` (widgets.py) on every axis whose x-data is a real datetime axis (a pandas `DatetimeIndex` plotted directly — Select Data preview, Time Series tab, Signal Calibration raw/calibrated panels). Matplotlib's default date locator/formatter otherwise prints a date once the axis is zoomed out far enough, which this project never wants. Call it right after `w.style_ax(ax)`. Do NOT call it on non-time axes (histograms, free-scatter plots of two arbitrary signals, PSD/frequency plots) — it would print garbage labels there. The GPS tab's ride-timeline bar is a special case (an elapsed-seconds axis, not a real datetime axis) — it has its own `_gps_time_formatter` in `gps.py` that follows the same HH:MM:SS.mmm convention by construction; don't route it through `w.format_time_axis`.
 
 ### Scatter Plots
 - Points: `s=8`, `alpha=0.5`, `linewidths=0`
@@ -107,13 +112,17 @@ Always use: `fontsize=7` (dense/small) or `fontsize=8` (full-size panels), `face
 ### PSD / Frequency Plots
 - Lines: `linewidth=1.2`
 - Peak frequency annotations: `fontsize=7`, `va="bottom"`
+- **X-axis fixed at 0.05–120 Hz** (`frequency.py _compute_frequency_plot`). `Front_Wheel_Pos_mm`/`Rear_Wheel_Pos_mm`/`aVert_g` are all logged at 240 Hz (`config.h IMU_ODR_HZ` / analog decimation — see Teensy_MTB_DAQ `CLAUDE.md`), so 120 Hz IS the Nyquist limit — nothing above it can be real content. (History: briefly set to 200 Hz on 2026-07-05 with a Nyquist marker line, then capped to 120 Hz since that equals Nyquist and made the separate marker redundant.)
 
 ---
 
 ## Widget & Text Standards
 
 ### Buttons
-- Always use `w.make_btn(parent, text, command)` — renders `ttk.Button` with `style="Dark.TButton"`
+- Always use `w.make_btn(parent, text, command, style="Dark.TButton")` — renders a `ttk.Button`. The optional `style=` arg selects a registered variant (default `Dark.TButton`)
+- **Variants** (both defined in `theme.py` → `setup_theme`):
+  - `Dark.TButton` — standard; font = scaled `TkDefaultFont`, padding `[8, 4]`
+  - `Small.TButton` — compact; font ≈ `0.7×` the scaled default, padding `[4, 2]`. Used by the **Device tab** (every button there goes through the `device._dev_btn` helper) so the SD/host button rows fit on screen
 - Never construct a `ttk.Button` directly or set style/colors inline; new button variants go in `theme.py`
 - **Visual spec** (defined in `theme.py` → `setup_theme`):
   - Normal: `background=DARK` (`#1b3a6b`), `foreground=BTN_FG` (`#ffffff`)
@@ -129,6 +138,20 @@ Always use: `fontsize=7` (dense/small) or `fontsize=8` (full-size panels), `face
 
 ### Listboxes
 - Always use `w.make_listbox(parent, selectmode=...)` — standardizes colors, selection highlight, and border
+- The **Select Data** file browser is a `ttk.Treeview` (not a Listbox) — see Tab Notes below
+
+### Tables (ttk.Treeview) — RULE: gridlines on every cell
+- **Every table shows solid grey gridlines around every cell** — color `TABLE_GRID` (`#808080`, `constants.py`), 1 px, opaque. No table may render without them.
+- **Table font**: all table text (Treeview body + headings + the config-grid cells) uses the named font `TableFont` = scaled default − 2 pt, created in `theme.setup_theme` (kept alive by a module-level ref — `Font.__del__` deletes named fonts on GC). Treeview `rowheight` is derived from it (`linespace + 8`). New tables/custom grids must use `font="TableFont"`, never the default font.
+- Implementation (requires Tk 9 — the Homebrew tcl-tk the venv links against):
+  - *Horizontal*: `theme._setup_table_gridlines` appends a 1-px `TABLE_GRID` image element (`Gridline.hline`) to the bottom of the shared `Row` layout — applies to all treeviews automatically, and tag/selection backgrounds keep working (the line draws on top).
+  - *Vertical*: Tk 9 native column separators (`Treeitem.separator` element colored via `Separator` style; `columnseparatorwidth=1`). **Each table opts in per column — call `w.enable_gridlines(tree)` after configuring the columns of every new Treeview.** This is the one per-table step; forget it and the table has horizontal rules but no vertical ones.
+- Both halves no-op gracefully on pre-9 Tk (`TclError` guarded).
+- **Word-wrap exception**: Treeview cells cannot wrap text (single-line, one global rowheight). A table that needs wrapping cells (e.g. the Device Configuration editor) is built instead as a custom scrollable grid (Canvas + Frame of `wraplength` Labels/Entries) and must still show `TABLE_GRID` gridlines — via 1-px cell gaps over a `TABLE_GRID`-colored frame.
+- **Headers cannot wrap either — confirmed on real hardware, don't re-attempt.** A `Treeview.heading(text=...)` containing an embedded `"\n"` renders as a single line regardless of the heading row's height (the container box grows with padding, but the `Treeheading.text` element's own text layout doesn't gain a second visible line — isolated by holding padding fixed and varying only the text/`-wraplength`, which produced identical `winfo_reqheight()` in every case). The **Signal Calibration table** (`MTB_DataLog_Analyze.py`) hit this: headers are short, no-underscore, single-line abbreviations instead (`Calibrated_Name` → "Cal. Name", `Raw_Sig_Min` → "Raw Min", `Value_at_Max` → "Val Max", etc.), with column widths measured against `TableFont` (`font.measure`) to confirm each actually fits. If a table someday needs genuine 2-line headers, the only real option is the same custom-grid rebuild as the word-wrap-exception above (overlaying real Label widgets in place of native headings) — don't try padding/`-wraplength`/embedded-`\n` again.
+
+### Notebook tabs
+- `App.TNotebook.Tab` carries an explicit font ≈ `0.7×` the scaled default (padding `[7, 3]`) so the tab strip stays compact; this is independent of the global `FONT_SCALE`
 
 ### Comboboxes
 - Standard width: `22`; always `state="readonly"`
@@ -146,35 +169,148 @@ Always use: `fontsize=7` (dense/small) or `fontsize=8` (full-size panels), `face
 - Always set `bg=BG` — never leave the default gray Tkinter background
 - Use `tk.Frame` for structural containers; `ttk.Frame` only when ttk theme inheritance is required
 
+## Select Data Tab (file_manager.py — FileManagerMixin)
+- The file browser is a 2-column `ttk.Treeview` (`columns=("name","size")`, `show="headings"`, `selectmode="extended"`), **not** a Listbox. Folders show as `📁 name` with a blank size; files show their size MB-only with two decimals.
+- Rows are inserted with `iid=str(index)` aligned to the parallel `self._entries` list (`[(kind, abspath), …]`), so selection logic stays index-based: read via `tree.selection()` / `tree.focus()` and map back with `self._entries[int(iid)]`. Double-click a folder row to descend; `⬆ Up` climbs to the parent.
+- `self.file_listbox` is the attribute name retained for the tree (built in `MTB_DataLog_Analyze._build_left_panel`).
+- **Toolbar row** (top of the tab, left→right): **Refresh File List** (`refresh_file_list` → re-scans the current `_source_dir` via `_populate_file_list`, for rides just offloaded to the folder), `⬆ Up`, `Change Source Directory`, `Delete File`. Selecting one or more file rows loads them immediately (debounced — see Performance); there is **no separate "load" button** (it was removed as redundant — a current-firmware file's `#CFG` header runs the full calibration cascade on selection anyway; the only thing that used to need it, a header-less pre-v70 log, is covered by the Signal Calibration tab's "Apply Updates").
+- **Delete File is multi-file**: `delete_selected_file` deletes *every* selected file row (the tree is `selectmode="extended"`). One selection → single-name confirm; multiple → the confirm dialog lists all names + count. Each `os.remove` is guarded independently so one failure (locked/permissions) doesn't abort the rest — survivors are still deleted and an error dialog names only the ones that failed.
+
+## GPS Tab (gps.py — GpsMixin)
+- One matplotlib figure, gridspec `(2,2)` height `[1,11]` width `[40,1]`: a thin **time-range bar** spanning the top, the **route map** bottom-left, a **colorbar** bottom-right. Controls above: "Color by:" combobox, Apply Filter / Clear Filter buttons, a window-readout label.
+- **Time bar**: the selected signal binned over the full ride (`scipy.stats.binned_statistic`, `_STRIP_BINS=1200`) drawn as a 1-row `imshow` strip; x-axis is seconds-from-start with a `FuncFormatter` showing `HH:MM:SS`. Two **draggable markers** (`axvline` with `ymin/ymax` beyond [0,1] and `clip_on=False` so they spill above/below the strip as grab handles) define the window — **green = start (earlier), red = finish (later)**. `_gps_color_markers` recolors by time value on every move, so green/red stay correct even when a marker is dragged past the other. Empty time bins render as `BG` via `cmap.set_bad`.
+- **Map**: a **satellite basemap** (Esri World Imagery) with the active route plotted on top, colored by the chosen signal; colorbar range = the signal's min/max.
+  - `basemap.py` fetches XYZ tiles via stdlib `urllib` (no geo deps), stitches them with pillow, and returns the image + its Web-Mercator extent. Tiles are disk-cached in `tempfile.gettempdir()/mtb_sat_tiles`. The route and grey preview are projected to **Web Mercator** (`basemap.lonlat_to_mercator`) so they align with the tiles; ticks are hidden, with an Esri attribution label.
+  - **Fills the window width**: `_gps_ensure_basemap` expands the full-route bbox to the *map axes' width/height ratio* (`_gps_axes_aspect`, from `get_position` × figure size) so the satellite spans the whole panel undistorted, with the route centered; `set_aspect("equal", adjustable="datalim")` keeps it filling. A debounced `resize_event` handler (`_gps_on_resize` → `after(200, _update_gps_plots)`) re-frames on window resize.
+  - The basemap is fetched for that **aspect-filled** bbox and cached on the mixin (`self._gps_basemap`/`_gps_merc_limits`, keyed by the rounded bbox), so it is not refetched on filter/recolor — only when the bbox or window aspect changes.
+  - **Offline fallback**: if any tile fails to download, `fetch_satellite_basemap` returns `None` and the map falls back to a plain lon/lat scatter (`aspect 1/cos(lat)`, visible axes). `self._gps_use_merc` records which mode is active and `_gps_project` picks the matching coordinates.
+- **Pan / zoom (slippy-map UX)**: left-drag the map to pan (`_gps_do_pan` uses the pixel→data scale captured at press so the grabbed point stays under the cursor), scroll-wheel to zoom around the cursor (`_gps_on_scroll`, 0.8/1.25 factor). Uniform transforms preserve the equal-aspect framing so `adjustable="datalim"` never fights the gesture. On gesture-end a debounced `_gps_schedule_nav → _gps_apply_nav` locks the user's limits into `self._gps_view` and re-runs `_update_gps_plots`, which **refetches satellite + DEM tiles for the visible extent** at a `_pick_zoom`-appropriate level — so imagery (and contours) re-sharpen as you zoom in, like Leaflet/Google Maps. "Reset View" (`_gps_reset_view`) clears `_gps_view` back to the auto route-fit; loading a new ride also resets it. While `_gps_view` is set, filter/recolor/marker-drag redraws keep that view instead of refitting.
+- **Topo contour lines** (checkbox "Topo lines", default on): `basemap.fetch_elevation_grid` pulls Terrarium DEM tiles over the *same* tile grid as the satellite (so the extent matches exactly), decodes elevation (`R*256+G+B/256-32768`), and `_draw_topo_contours` overlays `ax.contour` lines (interval auto-chosen 10–100 m from the local relief, downsampled for speed, labeled). Cached alongside the basemap (`self._gps_elev`). Only drawn in Mercator/satellite mode; absent/flat terrain simply yields no lines.
+- **Color signal**: any numeric `cal_result_df` column (combobox), plus a synthetic **"Time (s)"** option (`_TIME_COLOR_KEY`, listed first) that colors by elapsed seconds from ride start. Default is the first present of `Rear_/Front_Horz_Wheel_Spd_mph`, `gps_spd_mph`, `Crank_Spd_RPM`. Both the time bar and the map resolve the choice through the single helper `_gps_color_values(df, col)` — it returns `_gps_secs(df.index)` for the synthetic key, `df[col].ffill()` for a real column — so the two views never diverge. The same scale drives both.
+- **Start/finish circles**: two large circles on the map (`_draw_endpoints`) — one **green** at the route point nearest the start marker, one **red** at the finish marker — updated live on drag via `set_offsets` (`_update_endpoints`, nearest-time lookup against `_gps_route_secs`; full route is not re-scattered). Lets you scrub the window endpoints and see their geographic location.
+- **Drawing source**: the time bar + grey preview always use the **full** cached frame `self._cal_full` (so the whole ride stays selectable); the colored map uses the **active** `self.cal_result_df` (full or filtered).
+
+## Global time filter (gps.py)
+- `_apply_all_calibrations` caches the full result as `self._cal_full` and resets `self._time_filter=None`. Every analysis tab reads `self.cal_result_df`, so filtering is just a slice of the cached frame — no recompute, no per-tab changes.
+- `_apply_time_filter(tmin,tmax)` sets `self.cal_result_df = self._cal_full[mask]` and calls `_refresh_all_analysis_tabs()` (the single shared refresher list, which also redraws the GPS map). `_clear_time_filter()` restores `self._cal_full`.
+- Apply/Clear Filter buttons map the marker window → timestamps and call those. Reloading data or re-running calibrations clears the filter and resets the markers (`_gps_reset_markers`).
+
 ## Device Tab (device.py — DeviceMixin)
-- Connection bar: Port dropdown, Refresh Ports, Baud combobox (default 115200; locked while connected), Connect/Disconnect
-  - Teensy 4.1 USB CDC ignores the requested baud — the host setting only matters if the device-side firmware uses a HardwareSerial UART. Leave at 115200 unless you have a specific reason to change it
+- Connection bar: Port dropdown, Refresh Ports, Connect/Disconnect (no baud selector)
+  - **Baud is fixed at 115200** in `_dev_connect` (`serial.Serial(port, baudrate=115200, …)`) — there is no UI control for it. The Teensy 4.1 USB CDC ignores the requested baud anyway (it would only matter if the device-side firmware used a HardwareSerial UART), so the selector was removed
+  - **Port dropdown lists real USB serial devices only** (`_dev_refresh_ports`): macOS always enumerates virtual ports (`/dev/cu.Bluetooth-Incoming-Port`, `/dev/cu.debug-console`) that can never connect, so ports are filtered to those with a real USB `hwid` (`p.hwid and p.hwid != "n/a"`), also excluding any device whose name contains `bluetooth`/`debug`. Empty list → shows `(no ports found)`. Teensy-looking ports (`usbmodem`/`ACM`/`COM`) sort first.
+- **Left column is split in thirds**: Device Configuration editor (top ⅓) above the Serial Dashboard (bottom ⅔)
+- **Device Configuration editor** (`_build_config_panel`): header label + `⟳ Read Config` / `⬆ Upload Config` buttons, and a 4-column **word-wrapping grid table** (Setting / Value / Description / Unit). NOT a Treeview — Treeview cannot wrap cell text, so this is a custom scrollable grid (Canvas + inner Frame, vertical scrollbar only + mouse-wheel; no h-scroll — the grid stretches to the canvas width and the Description column absorbs the slack): every cell **including headers wraps** (`Label wraplength = column px − 10`), rows auto-size to their wrapped content, and the gridline rule is met with 1-px gaps over a `TABLE_GRID` background. **Only the Value column is editable** — each value cell is a live `w.make_entry` bound to a `StringVar` (rows held in `self._dev_cfg_rows`; commas are stripped on upload since the config format forbids them). Rebuild via `_dev_cfg_populate(rows)`. `Read Config` = `MTB:GET:CONFIG.CSV` → `_parse_config_csv` (skips `#` comments + the `key,...` header row, same rules as firmware `config_file.cpp`). `Upload Config` = confirmation dialog → `_serialize_config_csv` (regenerates the self-documenting file: comment banner + header + rows) → `MTB:PUT:CONFIG.CSV:<size>` with CRC verification. Settings fully apply on next device boot (the firmware reloads in-RAM values immediately, but tz/BLE gating are boot-time)
 - Serial Dashboard: live ASCII feed from the Teensy `statusThread` (2 Hz), drained from a background reader thread into a `queue.Queue` and rendered via `after(80, _dev_poll_dashboard)`
-- Teensy SD Files tree: `selectmode="extended"` for multi-select. macOS keys: ⌘-click toggle, ⇧-click range. Buttons: Select All, Clear Selection, ⬇ Download Selected, ✖ Cancel Download (enabled only during a transfer), 🗑 Delete Selected
+- Teensy SD Files tree: `selectmode="extended"` for multi-select. macOS keys: ⌘-click toggle, ⇧-click range. **Header buttons** (right of the "Teensy SD Files" label): `⟳ Refresh SD`, then `🗑 Delete from SD` to its right (both call the existing handlers). **Action row** below the tree: Select All, Clear Selection, ⬇ Download Selected, ✖ Cancel Download (enabled only during a transfer). There is a single delete control (in the header) — do not re-add one to the action row
 - Host Files tree: shows `~/Documents/MTB_DAQ/Archived_Data/` with size + mtime
+- **File sizes** in both trees are formatted MB-only with two decimals via `device._fmt_size_mb` (the Size columns are widened to fit). The live transfer status line still uses the adaptive `_fmt_size` (B/KB/MB) for partial byte counts
 - Transfer status line: `Downloading <name> (i/N)  <bytes>/<total>  @ <speed>  ETA <m:ss>` — progress callback throttled to 10 Hz so the worker thread isn't starved by Tk's `after()` lock contention on macOS
 - Cancel Download: sets a flag, calls `_serial.cancel_read()` to unblock pyserial, then force-disconnects (the Teensy will keep streaming the rest of the file and the protocol can't cleanly resync mid-transfer; user must reconnect)
 
 ## MTB Serial Protocol (device.py ↔ Teensy sd_transfer.cpp)
-- ASCII command/response on USB CDC, with one exception: `MTB:GET` interleaves a raw binary block between `MTB:SIZE:<n>` and `MTB:CRC32:<hex>`
-- Commands: `MTB:STATUS`, `MTB:LIST`, `MTB:GET:<name>`, `MTB:DEL:<name>`. All replies terminate with `MTB:END`
+- ASCII command/response on USB CDC, with two exceptions: `MTB:GET` interleaves a raw binary block between `MTB:SIZE:<n>` and `MTB:CRC32:<hex>`, and `MTB:PUT` receives one after `MTB:READY`
+- Commands: `MTB:STATUS`, `MTB:LIST`, `MTB:GET:<name>`, `MTB:DEL:<name>`, `MTB:PUT:<name>:<size>`. All replies terminate with `MTB:END`
+- Upload (`_cmd_put`): host sends the command line, waits for `MTB:READY`, streams `<size>` raw bytes, then reads `MTB:CRC32:<hex>` + `MTB:OK` + `MTB:END`. The device stages bytes in `UPLOAD.TMP` and atomically renames over the target, so a failed upload never corrupts the existing file; host verifies the returned CRC against its own `zlib.crc32`. 64 KB size cap (config-scale files)
 - Download integrity: the Teensy holds `_transferActive=true` for the whole duration including the trailing `MTB:CRC32` and `MTB:END` lines so the dashboard thread can't splice text into the binary stream or the CRC line. CRC32 verified on host via `zlib.crc32` (matches Teensy `crc32_update`); mismatch surfaces a popup but the file is still saved
 - Device-side gating: the Teensy enters STANDBY automatically whenever USB is connected (host port open or charger active). In STANDBY, recording is stopped, the file is fully closed, and MTB commands work. There is no manual TRANSFER-mode button anymore
 
-## CSV columns (current Teensy SW v21)
-The CSV the device writes has a new `event` column at the end — a 0/1 spike that's `1` on the single row sampled right after the user pressed the secondary button (lap/jump marker). `file_manager.py` reads columns by name so new fields don't break import, but downstream tools that assume column count should be aware
+## Input format — Teensy MTB DAQ CSV (SW_VERSION 56), fixed 240 Hz
+The analyzer targets **Teensy_MTB_DAQ** logs only (the old Open_Log_Artemis format is no longer supported).
 
-## Speed Edge-Detection (calibration.py)
-- Signals: `Crank_Spd_rpm` (A2mV), `Front_Horz_Wheel_Spd_mph` (A0mV), `Rear_Horz_Wheel_Spd_mph` (A1mV)
-- Threshold: `raw.quantile(0.02) + (raw.quantile(0.98) - raw.quantile(0.02)) * 0.70` — hardcoded 70%
-- After reindex: `.ffill(limit=20)` — holds last speed for up to 20 samples (~300ms)
-- Falling-edge detection: `binary.diff() == -1`; dt = time for n_spokes edges = 1 revolution
-- Series assignment: build `pd.Series(vals, index=DatetimeIndex(times))` then `.reindex(self.df.index)`
-  — DO NOT use `series.loc[list] = vals`; fails when self.df.index has duplicate timestamps (multi-file concat)
+**Self-describing header block (firmware `writeHeader`).** New logs begin with a `#`-prefixed block before the column header:
+```
+#MTB_DAQ,1                       <- magic + format version
+#CFG,device_name,Transition Smuggler
+#CFG,fork_v_extended,4.500       <- fork/shock/speed cal + device settings (keys match CONFIG.CSV)
+#CFG,fork_v_compressed,0.500
+#CFG,fork_travel_mm,225.0
+#CFG,shock_v_extended,4.310
+#CFG,shock_v_compressed,0.561
+#CFG,shock_travel_mm,75.0
+#COLUMNS                         <- marker: the NEXT line is the column header
+time,drops,...,event
+```
+`file_manager._parse_log_header(path)` reads this block into `self._log_config` (values → float where parseable) on load — the first loaded file that has one wins. The data read still uses `comment="#"`, which skips the whole block (and the trailing `# ring_hwm` footer) and picks up the `time,...` line as the header, so old logs without the block load unchanged. **The fork/shock `#CFG` cal values auto-update the calibration table on load** — see the Raw→calibrated mapping section. Column header:
+```
+time, drops, spd1_hz, spd2_hz, spd3_hz,
+accel_x, accel_y, accel_z,            # m/s²  (raw IMU body frame)
+gyro_x, gyro_y, gyro_z,              # rad/s (raw IMU body frame)
+quat_x, quat_y, quat_z, imu_temp_c,  # SFLP game-rotation-vector vector part (body frame)
+analog1_v, analog2_v,                # sensor-side volts (0–5 V): analog1=front fork, analog2=rear shock
+gps_lat, gps_lon, gps_alt, gps_spd, gps_sats,
+batt_soc, power_w, cadence_rpm, event
+```
+- **`time` is `HH:mm:ss.sss` with no date** — the date comes from the RTC-stamped **filename** (`YYYYMMDD_HHMMSS.csv`). `file_manager._build_datetime_index` combines them and handles a within-file midnight rollover.
+- Lower-rate channels are **NaN-filled at 240 Hz** (GPS 10 Hz, BLE ~1–4 Hz, batt 1 Hz, speeds only on a trigger capture). Sparse channels plot as dots via the existing >50 %-NaN rule.
+- The logger appends a trailing `# ring_hwm=… ` summary line — the loader passes `comment="#"` to drop it.
+- **The CSVs in `~/Documents/MTB_DAQ/Archived_Data/` are OLD-system data — do not use them to validate.**
+
+## Signal Calibration Tab (calibration.py — CalibrationMixin) — explicit apply, no auto-update
+- **RULE: nothing on this tab recomputes or redraws automatically as you edit.** Typing in the form fields (Raw/Value min-max, Bias, New Calibrated Signal Name) only sits in the widgets — it does **not** write to `saved_calibrations`, does **not** recompute `cal_result_df`, and does **not** refresh any tab (including this tab's own preview plots). This was a deliberate change (2026-07) from the old per-keystroke `_sync_form_to_table` binding, which fired the full `_apply_all_calibrations()` cascade (recompute + redraw all 8 analysis tabs) on every keystroke.
+- **`Apply Updates` button** (top of the tab, `apply_calibration_updates`) is the only way edits take effect: `_commit_form_to_table()` writes the form into the currently-selected signal's `saved_calibrations` row (and refreshes its Calibrated_Min/Max via `_recompute_calibrated_range`), then `_apply_all_calibrations()` recomputes `cal_result_df` + refreshes every analysis tab, then `_update_cal_plots(autofill=False)` refreshes this tab's own raw/calibrated/histogram preview.
+- Selecting a row in the saved-calibrations treeview (`on_cal_tree_select`) or picking a raw signal in the "Signal to calibrate" combo still update live — those are pure navigation/preview (loading from or browsing existing state), not edits, so they don't need Apply.
+- **`Auto-Cal Fork (Zero Min)` / `Auto-Cal Shock (Zero Min)`** buttons (`auto_calibrate_fork`/`auto_calibrate_shock` → `_auto_calibrate_zero_min`): set that signal's **Bias** so the calibrated position's minimum over the *whole loaded ride* is exactly 0 — i.e. `bias = min(a·raw + b)` computed from the actual `analog1_v`/`analog2_v` samples (not just the two calibration endpoints), so `min(a·raw + b − bias) == 0` after applying. Zeroes a suspension channel to its most-extended point actually observed in the data (corrects small offset/mounting error) without touching the Raw/Value calibration points. Unlike form edits, clicking one of these buttons **is** an explicit action and immediately runs the full apply cascade — it is not gated behind "Apply Updates".
+
+## Performance (2026-07) — the calibration cascade + file load are the app's slow paths
+`_apply_all_calibrations()` (recompute `cal_result_df` + redraw all 8 analysis tabs) runs on every file load, "Apply Updates", and Auto-Cal click — it's the single most expensive operation in the app, so it's had two rounds of attention:
+
+- **Speed fixes** (measured on a synthetic 30-min/240Hz/432k-row ride):
+  - **`_time_varying_lowpass` (calibration.py)** replaces the old per-row Python loop for the Dynamic Sag filter (front + rear) with a numerically-exact **blocked vectorized** computation (`_time_varying_lowpass_loop` kept as the literal old code, used only as a fallback). The naive recursion `y[i]=a[i]·x[i]+(1-a[i])·y[i-1]` has a closed form via a cumulative product, but a single global cumprod underflows to 0 over long rides — so it's computed in ~4096-row blocks, carrying the true running value forward as each block's initial condition (safe because the filter's ~0.3 Hz cutoff means old samples decay to ~0 within a few thousand rows anyway). Validated against the loop to ~1e-13 abs error across normal data, duplicate timestamps, and multi-file gap boundaries. **Falls back to the exact loop if the signal contains any NaN** (dense analog channels never do; this is a defensive-only path). ~150x faster (0.71s → ~0.005s per signal on the 432k-row benchmark) — was ~70% of total cascade time.
+  - **`legend.loc` global default (MTB_DataLog_Analyze.py)** set to `"upper right"` instead of matplotlib's default `"best"`. `loc="best"` searches candidate positions against every plotted artist to avoid overlapping data — with a few hundred thousand points per axes that search alone measured **~0.7s per legend call**. A fixed corner is ~6.6x faster and applies to every `legend()` call in the app with no explicit `loc=`. **Three call sites explicitly override to `"upper left"`** because their upper-right corner is already occupied by a fixed annotation and would otherwise collide: `plots.py` (Free Scatter histogram's stats box), `free_histogram.py` (same), `susp_speed.py` (front/rear speed scatter's "Comp"/"Rebound" quadrant labels — placed at (0.76,0.93)/(0.24,0.07), so legend goes upper-left instead).
+  - **`FileManagerMixin._fast_time_to_timedelta` (file_manager.py)** replaces `pd.to_timedelta(raw["time"].astype(str))` for the fixed `HH:MM:SS.sss` format with a vectorized byte-level parse (view the string column as fixed-width bytes, subtract `'0'` to get digit values, combine with pure integer arithmetic — no float rounding, so bit-exact with `pd.to_timedelta` when taken). ~6.5–12x faster (0.35s → ~0.03–0.06s on the benchmark). **Validates the exact 12-char `DD:DD:DD.DDD` shape first (all-vectorized) and falls back to the original `pd.to_timedelta` call, unchanged, if anything doesn't match** — e.g. a row truncated by a power-loss mid-write — so malformed-data behavior (NaT, whatever quirks `pd.to_timedelta` has) is preserved exactly, only well-formed data takes the fast path.
+  - Net effect on the benchmark ride: file load (read + preview + header-triggered cascade) **7.1s → 5.2s**; a subsequent Apply Updates / Import **4.65s → 3.1s**. The remaining time is legitimate matplotlib rendering across 8 tabs and CSV parsing — further large wins would need either down-sampled/decimated plotting or deferring redraws for tabs the user isn't currently viewing (not implemented — a bigger architectural change, not attempted here).
+- **Progress dialog (`widgets.ProgressDialog`)**: a modal "please wait" window (determinate progress bar + status label naming the current step + live elapsed/estimated-remaining time) shown during all three of the above operations (`file_manager.on_file_select`/`_on_file_select_settled`, `calibration.apply_calibration_updates`/auto-cal). Tk is single-threaded, so this does **not** background the work in a thread — `_apply_all_calibrations` and `_load_from_paths` both accept an optional `progress_cb(label, frac)` called at named checkpoints (deriving speed, rotating IMU axes, dynamic sag, redrawing each analysis tab by name, etc.), and each `ProgressDialog.step()` call both updates the bar and pumps Tk's event loop (`self.win.update()`) so the window actually repaints between steps instead of freezing. `_refresh_all_analysis_tabs` sub-steps per tab (labeled "Redrawing `<Tab>` tab…"); its own 0..1 fraction is rescaled into the parent call's remaining range so the bar never jumps backward.
+- **Debounced preview selection (`file_manager.on_file_select`)**: shift/ctrl multi-select in the Select Data listbox fires `<<TreeviewSelect>>` once per intermediate selection state; each one used to trigger a full reload. Now debounced 150 ms (`self.after` cancel/reschedule, same pattern as `gps._gps_on_resize`) so only the settled selection actually loads.
+
+### Frequency tab is opt-in (2026-07) — was a 47s hang on real ride data
+Root-caused against a real ride (`20260703_200146_Smuggler.csv`, ~116k rows) that hung for ~47s on every load/Apply — the progress dialog's last step before the stall was "Redrawing Frequency tab…". Two compounding issues, both fixed:
+- **`_update_frequency_plot` no longer runs automatically.** It's opt-in via a **"Compute Frequency Analysis" button** at the top of the Frequency tab (`frequency._compute_frequency_plot`, wired to the button). The version in `_refresh_all_analysis_tabs`'s step list is now `_update_frequency_plot`, a cheap no-op that just flags `self._freq_stale = True` and updates a status label ("Data changed — click Compute Frequency Analysis to refresh.") — so the tab always reflects whether its plot matches the current data, without paying the PSD cost on every load/Apply/Auto-Cal. Most sessions never open this tab.
+- **Root cause of the 47s, fixed regardless of the button (so a click doesn't just move the hang):** `series.resample(f"{median_dt_ms}ms")` bins across the **full calendar span of the index**, regardless of how sparse the data actually is. This ride had two suspiciously round gaps — exactly 4.00h and 20.00h (device left idle/paused mid-recording, or a firmware RTC artifact — worth separately investigating on the firmware side, unrelated to this fix) — turning a 116k-row series into a **~22M-row resampled one** per signal (×3 signals ≈ the observed ~47s). `FrequencyMixin._largest_contiguous_segment` splits the series at any gap wider than `_GAP_SEGMENT_FACTOR` (50) nominal sample periods and keeps only the largest contiguous run before resampling — PSD assumes one continuous, uniformly-sampled signal, so splicing disjoint segments together would be wrong anyway, not just slow. On the same ride: 47s → **0.06s**.
+- **Check for recurrence:** this `resample()`-across-full-span trap could bite any other code that calls `.resample()` on a `cal_result_df` column without first checking for/segmenting around large gaps. `frequency.py` is currently the **only** call site (`grep -rn "\.resample(" *.py`) — if a new one is added, apply the same gap-segmentation pattern.
+
+## Raw → calibrated name mapping (the calibration table is the mapping layer)
+Downstream tabs key off the *calibrated* names, set by `__UserFiles/Calibration_Config/Default_Calibration_Config.csv`:
+- `analog1_v → Fork_Pos_mm` / `analog2_v → Shock_Pos_mm` — volts→mm. **Auto-calibrated from the CSV `#CFG` header on load** (`calibration._apply_log_config_to_calibrations`): each row is set from the per-device config so that compressed volts → sensor travel (mm) and extended volts → 0 mm — i.e. `Raw_Sig_Min=<fork/shock>_v_compressed → Value_at_Min=<…>_travel_mm`, `Raw_Sig_Max=<…>_v_extended → Value_at_Max=0`. Falls back to the `Default_Calibration_Config.csv` seed values (Honeywell datasheet sensitivities: fork −17.78 mV/mm, shock −50 mV/mm) for older logs with no header. User can still override per ride.
+- `accel_x/y/z → aX_g/aY_g/aZ_g` (×1/9.80665), then rotated → `aFwd_g/aVert_g/aLat_g`.
+- `gyro_x/y/z → gX_DPS/gY_DPS/gZ_DPS` (×180/π), then rotated → `gRoll_DPS/gPitch_DPS/gYaw_DPS`.
+- `spd1→Front_Horz_Wheel_Spd_mph`, `spd2→Rear_Horz_Wheel_Spd_mph`, `spd3→Crank_Spd_RPM` (see below).
+- `imu_temp_c→Board_Temp_C`, `batt_soc→Batt_SoC`, `power_w→BLE_Power_W`, `cadence_rpm→BLE_Cadence_RPM`, `gps_lat/lon/alt/sats`, `quat_*` pass through.
+- **`gps_spd` is always converted m/s→mph and renamed `gps_spd_mph`** (`_apply_all_calibrations`, ×2.23694, right after `cal_result_df` is built — independent of the calibration config). The firmware logs `gps_spd` in m/s (`gps.speed_mps`).
+- There is **no magnetometer** on the LSM6DSV16X — all `m*_uT` features are removed.
+
+## Speed from frequency channels (calibration.py `_derive_speed`)
+- `spd1/2/3_hz` are already frequency (FreqMeasureMulti), sparse/NaN-filled.
+- **Measured stream structure (ride 20260703_200146, 2026-07-05)** — supersedes the old "raw Hz alternates high/low on all channels" note: the **crank** genuinely alternates ~2.5–2.7x (its 5-pair target geometry is real in the data); the **wheels** vary only mildly (0.7–1.4x consecutive — no visible pairing; effectively 12 roughly-even targets/rev). This is why despiking runs in the **pair-mean domain**, never on the raw stream — a raw-domain median would flatten the crank's genuine alternation (`median(L,H,L)=L`) and bias cadence low.
+- **Chatter despike (2026-07-05):** all three prox sensors occasionally emit an extra falling edge inside a target's passage (re-trigger chatter, ~1 per 8 wheel revs), splitting one normal gap in two — an isolated raw Hz spike of ~4.5–5.5x (wheels) / ~3–5x (crank); verified physically real (spike period + next period == one normal gap). Two stages on the pair-mean, both required: (1) drop pair-means > 1.8x their local rolling median-31 (handles double-chatter runs a small median can't clip), then (2) rolling median-5 polish for the ~1.25–1.45x remainder-gap wiggle. The two stages run **twice** (pair-average once, then stages 1+2 applied a second time to their own output) — capped at one extra pass. Validated: derived-speed samples >2x local median 200/194/185 → **0/0/0** (front/rear/crank), medians preserved within 1%. Firmware ≥ v79 also rejects wheel chatter at capture time (`speed.cpp`, `configSpdRetrigRatioFront/Rear()`, default 2.5x — a `CONFIG.CSV` setting since v80/v81); ≥ v81 also lightly filters the crank (`configSpdRetrigRatioCrank()`, default 6x — deliberately loose since the crank's genuine ~2.9x pair alternation is too close to its own chatter range for a tight ratio, so it only catches the most extreme outliers). **The analyzer despike remains the primary cleanup regardless of firmware version** — it cleans pre-v79/v81 logs and catches the crank chatter (~3–5x) the loose 6x firmware ratio lets through.
+- **Stage-1 window widened 15→31 (2026-07-05):** even with an improved sensor bracket/mount, a residual crank spike was still visible. Root cause: sustained bursts of 3+ consecutive spurious raw captures (~9 events out of 358 chatter events on the reference ride) could partly contaminate stage 1's local-median reference, letting some burst samples slip under the 1.8x cutoff. Widening the reference window to 31 samples (~2.1s of pedaling at this ride's ~67ms/pair-mean spacing) dilutes that contamination — validated: residual "hot" (>1.5x a 101-sample reference) samples dropped 32→19, and the two worst multi-sample plateau runs (length 6 and 9) that survived at window-15 are eliminated entirely. Front/rear wheel medians and drop counts are effectively unchanged by the wider window (their chatter is isolated single-edge, not burst). **Not widened further** — at ~67ms/pair-mean, 31 samples already spans ~2.1s; a much wider window would make the filter slow to track a genuine fast cadence change (e.g. a sprint start) and risk rejecting real data as chatter.
+- **Known residual limitation (2026-07-05, crank only):** the mildest bursts (~1.5–1.7x true cadence) survive at **any** window width, because their own elevation ratio sits genuinely below the 1.8x cutoff — that isn't reference contamination, it's the threshold intentionally staying clear of genuine cadence variation. Verified directly: at window-15, -31, -51, and -101 the same example burst sample (29.1 Hz vs. ~18.7 Hz true) computes to the same ~1.5–1.6x ratio regardless of window size. Reaching those would require lowering the 1.8x ratio itself, at the cost of false-positiving on real speed changes — not pursued.
+- Recipe: average 2 consecutive Hz readings (pair-mean) → despike as above → ÷ triggers-per-rev (wheel 12, crank 10) → rev/s; `RPM = rev/s·60`, `mph = rev/s·circ_in·3600/63360`. Hold each sparse value via `.reindex(df.index).ffill(limit=…)` where the limit is derived from the data rate, NOT hardcoded. **✅ VALIDATED (2026-07-05): triggers/rev cross-checked against GPS ground speed — implied ~12.6 targets/rev on the rear wheel, so ÷12 is correct; crank ÷10 yields a plausible ~107 RPM pedaling median on the same ride.**
+- Triggers-per-rev come from the bike-params "Triggers/Rev" fields (defaults 12/12/10).
+- Series assignment uses `.reindex(self.df.index)` — DO NOT use `series.loc[list] = vals` (fails on duplicate timestamps from multi-file concat).
+
+## IMU rotation & quaternion attitude (calibration.py)
+- The IMU is installed: **+X back & θ down, +Y down & θ forward, +Z right** (θ = `pitch_offset_var`, default 30°). A single fixed body→vehicle rotation maps raw body-frame accel/gyro into ISO 8855 (X fwd, Y left, Z up): `fwd=-cosθ·x+sinθ·y`, `lat=-z`, `up=-sinθ·x-cosθ·y`. Rest check: chip reads +g up → `aVert_g≈+1g`.
+- Attitude `Pitch_deg/Roll_deg/Yaw_deg` comes from the **SFLP fusion quaternion** (qw reconstructed via `sqrt(1−x²−y²−z²)`), composed with the mount rotation and a rest-pose offset, via `scipy …Rotation.as_euler("ZYX")`. Quaternion NaN → attitude NaN (no fabricated values). The old complementary filter is gone. **TODO: validate Euler signs/order against a real log.**
+
+## Suspension/wheel velocity (calibration.py `_savgol_velocity`)
+Per the firmware design (`doc/suspension_daq_sampling_rate.pdf`), velocity is derived OFFLINE from logged position as a Savitzky-Golay first derivative: `savgol_filter(pos, window_length=7, polyorder=6, deriv=1, delta=sample_period)`. Outputs `Front_Vert_Wheel_Spd_mmps` / `Rear_Vert_Wheel_Spd_mmps` (mm/s).
 
 ## Documentation Rules
 - Always update CLAUDE.md whenever architecture, module structure, key patterns, or data-processing behaviour changes
 - CLAUDE.md must remain consistent with the source code at all times
+
+## Signal Naming Convention
+Calibrated/derived signal names are CamelCase words plus a unit suffix using **standard unit capitalization**: `W` (watt), `g` (gravity), `m`/`mm` (metre/millimetre), `deg` (degree), `C` (Celsius), and the capitalized tokens `SoC`, `DPS`, `RPM`. Compound rate tokens: `mph`, `mps` (m/s), `mmps` (mm/s), `Perc` (percent). Examples: `BLE_Power_W`, `BLE_Cadence_RPM`, `Crank_Spd_RPM`, `gPitch_DPS`, `Batt_SoC`, `Fork_Pos_mm`, `Front_Vert_Wheel_Spd_mmps`, `Board_Temp_C`, `Pitch_deg`, `Fork_Pos_Perc`. Apply consistently to every new calibrated name.
+
+## No Hardcoded Sample Rates
+Never hardcode the log rate (it is nominally 240 Hz but must not be assumed). Always derive the period/rate from the loaded data's time index via `widgets.sample_period_s()` / `sample_rate_hz()` (median of `index.diff()`), and use it for filter `delta`, dt windows, and ffill limits.
+
+## Validation TODO
+Real Teensy logs now exist (first rides 2026-07). Status:
+- ✅ **Speed trigger factor — VALIDATED** (2026-07-05, ride 20260703_200146): rear-wheel Hz cross-checked against GPS ground speed → implied ~12.6 targets/rev, confirming ÷12; crank ÷10 gives a plausible ~107 RPM pedaling median. The measured stream structure also corrected the pair-alternation assumption — see "Speed from frequency channels".
+- ⬜ Fork/shock voltage→mm sensitivities — still to verify against a measured stroke.
+- ⬜ IMU body→vehicle rotation (Euler signs/axis order) — still to verify. Search the code for `TODO: validate`.
 
 ## Code Style
 - Partition logic heavily into small, focused sub-functions — avoid large monolithic functions

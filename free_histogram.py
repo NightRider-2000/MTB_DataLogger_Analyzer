@@ -38,7 +38,7 @@ class FreeHistogramMixin:
         self.fh_y_combo.bind("<<ComboboxSelected>>", self._update_free_histogram)
 
         tk.Label(left, text="(uses Signal 1 as X;\nSignals 2–4 ignored)",
-                 bg=BG, fg=GRID, font=("TkDefaultFont", 8),
+                 bg=BG, fg=GRID, font=("TkDefaultFont", 12),
                  justify="left").pack(anchor="w", pady=(4, 0))
 
         # ── Right: plot canvas ────────────────────────────────────────────────
@@ -138,13 +138,14 @@ class FreeHistogramMixin:
             if plotted:
                 self.ax_fh.text(
                     0.97, 0.97, "\n\n".join(stats_lines),
-                    transform=self.ax_fh.transAxes, fontsize=7,
+                    transform=self.ax_fh.transAxes, fontsize=10,
                     verticalalignment="top", horizontalalignment="right", color=DARK,
                     bbox=dict(boxstyle="round,pad=0.4", facecolor=BG, edgecolor=GRID, alpha=0.9),
                 )
                 handles, _ = self.ax_fh.get_legend_handles_labels()
                 if handles:
-                    self.ax_fh.legend(fontsize=8, facecolor=BG,
+                    # upper left: the stats box above occupies upper right
+                    self.ax_fh.legend(fontsize=12, facecolor=BG, loc="upper left",
                                       edgecolor=DARK, labelcolor=DARK)
                 self.ax_fh.set_xlabel("Value", color=DARK)
                 self.ax_fh.set_ylabel("Count",  color=DARK)

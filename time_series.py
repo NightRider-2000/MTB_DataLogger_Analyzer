@@ -60,7 +60,7 @@ class TimeSeriesMixin:
             plot_combos = []
             for j in range(_N_SIGS):
                 color_dot = tk.Label(inner_row, text="●", bg=BG,
-                                     fg=HIST_COLORS[j % len(HIST_COLORS)], font=("", 11))
+                                     fg=HIST_COLORS[j % len(HIST_COLORS)], font=("", 17))
                 color_dot.pack(side=tk.LEFT, padx=(6 if j else 0, 2))
                 var   = tk.StringVar()
                 combo = ttk.Combobox(inner_row, textvariable=var, state="readonly", width=22)
@@ -96,11 +96,12 @@ class TimeSeriesMixin:
         self._ts_xlim_current = None
         cols = [""] + list(self.cal_result_df.columns)
         _defaults = {
-            (0, 0): "Front_Wheel_Pos_perc",
-            (0, 1): "Rear_Wheel_Pos_perc",
+            (0, 0): "Front_Wheel_Pos_Perc",
+            (0, 1): "Rear_Wheel_Pos_Perc",
             (1, 0): "Front_Horz_Wheel_Spd_mph",
             (1, 1): "Rear_Horz_Wheel_Spd_mph",
-            (2, 2): "Crank_Spd_rpm",
+            (1, 2): "gps_spd_mph",
+            (2, 2): "Crank_Spd_RPM",
         }
         for i, plot_combos in enumerate(self._ts_combos):
             for j, combo in enumerate(plot_combos):
@@ -128,15 +129,7 @@ class TimeSeriesMixin:
             if not col or col not in self.cal_result_df.columns:
                 continue
             color = HIST_COLORS[j % len(HIST_COLORS)]
-            series = w.insert_gap_nans(self.cal_result_df[[col]])[col]
-            sparse = series.dropna()
-            nan_frac = 1 - len(sparse) / max(len(series), 1)
-            if nan_frac > 0.5:
-                # Sparse signal (e.g. edge-detected RPM) — plot as dots
-                ax.plot(sparse.index, sparse.values, color=color,
-                        linestyle="none", marker=".", markersize=3)
-            else:
-                series.plot(ax=ax, legend=False, color=color)
+            w.plot_time_series_smart(ax, self.cal_result_df[col], color=color)
             plotted = True
 
         if plotted:
@@ -145,7 +138,7 @@ class TimeSeriesMixin:
             labels  = [var.get() for var in self._ts_vars[idx] if var.get()]
             if labels:
                 ax.legend(handles[:len(labels)], labels,
-                          fontsize=7, loc="upper right",
+                          fontsize=10, loc="upper right",
                           facecolor=BG, edgecolor=DARK, labelcolor=DARK)
 
             # Capture full range from data
@@ -156,8 +149,9 @@ class TimeSeriesMixin:
                     self._ts_xlim_current = xlim
 
         is_bottom = (idx == _N_PLOTS - 1)
-        ax.set_xlabel("Time" if is_bottom else "", color=DARK, fontsize=8)
+        ax.set_xlabel("Time" if is_bottom else "", color=DARK, fontsize=12)
         w.style_ax(ax)
+        w.format_time_axis(ax)
         if not is_bottom:
             ax.tick_params(axis="x", labelbottom=False)
 

@@ -11,13 +11,12 @@ from constants import BG, DARK, HIST_COLORS, WORLD_AXIS_COLOR, BOARD_AXIS_COLOR
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _BIKE_IMG  = os.path.join(_DIR, "__UserFiles", "Bike_Picture.jpeg")
-_BOARD_IMG = os.path.join(_DIR, "__UserFiles", "Board_Picture.png")
 
 # Fixed signal groups — each row becomes a histogram panel
 _GROUPS = [
     ("Attitude (deg)",  [("Pitch_deg",  "Pitch"), ("Roll_deg",  "Roll")]),
     ("Accel ISO (g)",   [("aFwd_g",     "Fwd"),   ("aVert_g",  "Vert"),  ("aLat_g",    "Lat")]),
-    ("Gyro ISO (dps)",  [("gPitch_dps", "Pitch"), ("gRoll_dps","Roll"),  ("gYaw_dps",  "Yaw")]),
+    ("Gyro ISO (DPS)",  [("gPitch_DPS", "Pitch"), ("gRoll_DPS","Roll"),  ("gYaw_DPS",  "Yaw")]),
 ]
 
 
@@ -61,32 +60,28 @@ class ImuMixin:
         right.grid(row=0, column=1, sticky="nsew", padx=6, pady=6)
         right.columnconfigure(0, weight=1)
         right.rowconfigure(0, weight=1)   # bike picture
-        right.rowconfigure(1, weight=1)   # bottom row (board pic + axis diagram)
+        right.rowconfigure(1, weight=2)   # axis diagram — 2x the bike picture's height
 
         # Bike picture — top, full width
         self._imu_bike_label = tk.Label(right, bg=BG)
         self._imu_bike_label.grid(row=0, column=0, sticky="nsew")
 
-        # Bottom row: board picture (left) + axis diagram (right)
+        # Axis orientation diagram — bottom, full width. set_aspect("equal") on
+        # the axes (below) keeps its content square and centers it within this
+        # wider figure automatically — no extra centering code needed.
         bot = tk.Frame(right, bg=BG)
         bot.grid(row=1, column=0, sticky="nsew")
-        bot.columnconfigure(0, weight=7)    # board picture (~35%)
-        bot.columnconfigure(1, weight=13)   # axis diagram (~65%, ~30% bigger than 50/50)
+        bot.columnconfigure(0, weight=1)
         bot.rowconfigure(0, weight=1)
 
-        self._imu_board_label = tk.Label(bot, bg=BG)
-        self._imu_board_label.grid(row=0, column=0, sticky="nsew")
-
-        # Axis orientation diagram — right of board picture
         self._imu_axis_fig = w.make_figure(figsize=(4, 4), dpi=100)
         self._imu_axis_ax  = self._imu_axis_fig.add_subplot(111)
         self._imu_axis_ax.set_facecolor(BG)
         self._imu_axis_canvas, axis_widget = w.make_canvas(self._imu_axis_fig, bot)
-        axis_widget.grid(row=0, column=1, sticky="nsew")
+        axis_widget.grid(row=0, column=0, sticky="nsew")
 
         self._imu_right_frame = right
         self._imu_bike_photo  = None
-        self._imu_board_photo = None
 
         right.bind("<Configure>", self._imu_resize_images)
 
@@ -104,16 +99,18 @@ class ImuMixin:
         try:
             theta_deg = float(self.pitch_offset_var.get())
         except (AttributeError, ValueError):
-            theta_deg = 30.5
+            theta_deg = 30.0
         theta = np.radians(theta_deg)
 
         L = 0.78   # arrow length
 
-        # Board-frame axes in sagittal plane (forward=right, up=up)
-        # Board X: mostly down, theta from vertical toward forward
-        bx = ( np.sin(theta), -np.cos(theta))
-        # Board Y: mostly forward, theta above horizontal
-        by = ( np.cos(theta),  np.sin(theta))
+        # Sagittal side-view: forward = +x (right), up = +y. +Z_body points to
+        # the rider's right (out of the page) and is not drawn in this 2D view.
+        # Installed LSM6DSV16X board axes:
+        #   +X_body = backward & θ below horizontal
+        #   +Y_body = down & θ forward of straight-down
+        bx = (-np.cos(theta), -np.sin(theta))
+        by = ( np.sin(theta), -np.cos(theta))
 
         # ISO world-frame axes
         wx = (1.0, 0.0)   # forward
@@ -130,38 +127,49 @@ class ImuMixin:
         ax.arrow(0, 0, wx[0]*L, wx[1]*L, fc=WORLD_AXIS_COLOR, ec=WORLD_AXIS_COLOR, **arrow_kw)
         ax.arrow(0, 0, wz[0]*L, wz[1]*L, fc=WORLD_AXIS_COLOR, ec=WORLD_AXIS_COLOR, **arrow_kw)
 
-        # Labels — placed beyond arrow tip, anchored away from arrow body
+        # Labels — placed beyond arrow tip, anchored away from arrow body.
+        # The diagram canvas is small (~15% of the window width), so fonts are
+        # kept a step below the compact-subplot sizes and each text element gets
+        # its own exclusive region (see the note band + legend quadrant below).
         lpad = 0.15
-        # Board X: arrow goes lower-left in display; label below tip
+        # Board X: arrow goes lower-left (backward & down); label below tip
         ax.text(bx[0]*(L+lpad), bx[1]*(L+lpad), "Board X",
-                color=BOARD_AXIS_COLOR, fontsize=8, ha="center", va="top", fontweight="bold")
-        # Board Y: arrow goes upper-left in display; label above tip
+                color=BOARD_AXIS_COLOR, fontsize=10, ha="center", va="top", fontweight="bold")
+        # Board Y: arrow goes lower-right (down & forward); label below tip
         ax.text(by[0]*(L+lpad), by[1]*(L+lpad), "Board Y",
-                color=BOARD_AXIS_COLOR, fontsize=8, ha="center", va="bottom", fontweight="bold")
-        # Fwd (X): arrow goes horizontally left; label above tip (clear of Board Y)
+                color=BOARD_AXIS_COLOR, fontsize=10, ha="center", va="top", fontweight="bold")
+        # Fwd (X): arrow goes horizontally right; label above tip
         ax.text(wx[0]*L, wx[1]*L + 0.14, "Fwd (X)",
-                color=WORLD_AXIS_COLOR, fontsize=8, ha="center", va="bottom", fontweight="bold")
-        # Up (Z): arrow goes straight up; label centered above tip (x=0 = center of display)
-        ax.text(0, wz[1]*L + 0.05, "Up (Z)",
-                color=WORLD_AXIS_COLOR, fontsize=8, ha="center", va="bottom", fontweight="bold")
+                color=WORLD_AXIS_COLOR, fontsize=10, ha="center", va="bottom", fontweight="bold")
+        # Up (Z): arrow goes straight up; label beside the shaft at mid height —
+        # the strip above the arrow tip is reserved for the legend, which is
+        # wider than half the axes on the small canvas this diagram gets.
+        ax.text(-0.08, 0.55, "Up (Z)",
+                color=WORLD_AXIS_COLOR, fontsize=10, ha="left", va="center", fontweight="bold")
+        # +Z_body note (out of the sagittal plane) — in its own band below all
+        # arrows/labels so nothing overlaps it. With the mirrored x-axis this is
+        # a view from the bike's LEFT side, so rider's right points INTO the page.
+        ax.text(0.0, -1.12, "Board Z → rider's right (into page)",
+                color=BOARD_AXIS_COLOR, fontsize=9, ha="center", va="center")
 
-        # Arc between world Fwd (0°) and Board Y (theta above horizontal)
+        # Arc between straight-down (−90°) and Board Y (θ forward of down)
         arc_r = 0.28
-        arc1 = np.linspace(0, theta, 40)
+        by_angle = np.arctan2(by[1], by[0])   # ≈ -(90° - theta)
+        arc1 = np.linspace(-np.pi/2, by_angle, 40)
         ax.plot(arc_r * np.cos(arc1), arc_r * np.sin(arc1),
                 color=DARK, linewidth=1.2, zorder=2)
-        mid1 = theta / 2
-        ax.text(arc_r * 1.45 * np.cos(mid1), arc_r * 1.45 * np.sin(mid1),
-                f"{theta_deg:.0f}°", color=DARK, fontsize=8, ha="center", va="center")
+        mid1 = (-np.pi/2 + by_angle) / 2
+        ax.text(arc_r * 1.6 * np.cos(mid1), arc_r * 1.6 * np.sin(mid1),
+                f"{theta_deg:.0f}°", color=DARK, fontsize=10, ha="center", va="center")
 
-        # Arc between world Down (-90°) and Board X (theta - 90° from x-axis)
-        bx_angle = np.arctan2(bx[1], bx[0])   # ≈ -(90° - theta)
-        arc2 = np.linspace(-np.pi/2, bx_angle, 40)
+        # Arc between straight-back (−180°) and Board X (θ below horizontal)
+        bx_angle = np.arctan2(bx[1], bx[0])   # ≈ -(180° - theta)
+        arc2 = np.linspace(-np.pi, bx_angle, 40)
         ax.plot(arc_r * np.cos(arc2), arc_r * np.sin(arc2),
                 color=DARK, linewidth=1.2, zorder=2)
-        mid2 = (-np.pi/2 + bx_angle) / 2
-        ax.text(arc_r * 1.45 * np.cos(mid2), arc_r * 1.45 * np.sin(mid2),
-                f"{theta_deg:.0f}°", color=DARK, fontsize=8, ha="center", va="center")
+        mid2 = (-np.pi + bx_angle) / 2
+        ax.text(arc_r * 1.6 * np.cos(mid2), arc_r * 1.6 * np.sin(mid2),
+                f"{theta_deg:.0f}°", color=DARK, fontsize=10, ha="center", va="center")
 
         # Dashed reference lines (horizontal + vertical)
         ax.axhline(0, color=DARK, linewidth=0.6, linestyle="--", alpha=0.35, zorder=1)
@@ -170,19 +178,22 @@ class ImuMixin:
         # Origin dot
         ax.plot(0, 0, "o", color=DARK, markersize=4, zorder=4)
 
-        # Legend
+        # Legend — screen upper-left corner: the Fwd arrow/label sit at mid
+        # height, so this corner stays clear of every other text element even
+        # on the small canvas this diagram renders into.
         handles = [
             Line2D([0], [0], color=BOARD_AXIS_COLOR, lw=2, label="Board frame"),
             Line2D([0], [0], color=WORLD_AXIS_COLOR, lw=2, label="ISO world frame"),
         ]
-        ax.legend(handles=handles, fontsize=6, facecolor=BG, edgecolor=DARK,
-                  labelcolor=DARK, loc="lower right")
+        ax.legend(handles=handles, fontsize=8, facecolor=BG, edgecolor=DARK,
+                  labelcolor=DARK, loc="upper left")
 
-        lim = 1.05
+        # Extra room below (-1.3) reserves an exclusive band for the Board Z note.
+        lim = 1.1
         ax.set_xlim(lim, -lim)   # inverted so forward (positive x) points left
-        ax.set_ylim(-lim, lim)
+        ax.set_ylim(-1.3, lim)
         ax.set_aspect("equal")
-        ax.set_title("IMU Axis Orientation", color=DARK, fontsize=8)
+        ax.set_title("IMU Axis Orientation", color=DARK, fontsize=12)
         ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
         for spine in ax.spines.values():
             spine.set_visible(False)
@@ -201,7 +212,7 @@ class ImuMixin:
         if w_px < 10 or h_px < 10:
             return
         slot_w = w_px
-        slot_h = h_px // 2
+        slot_h = h_px // 3   # bike picture's row is 1/3 of this frame's height (row weights 1:2)
 
         # Bike picture — flipped left-to-right
         try:
@@ -212,22 +223,7 @@ class ImuMixin:
             self._imu_bike_label.configure(image=self._imu_bike_photo)
         except Exception:
             self._imu_bike_label.configure(text="[Bike_Picture.jpeg not found]",
-                                           fg=DARK, font=("", 9))
-
-        # Board picture — rotated 60° counter-clockwise, composited onto BG
-        try:
-            img = Image.open(_BOARD_IMG).convert("RGBA")
-            img = img.rotate(60, expand=True, resample=Image.BICUBIC)
-            bg_color = tuple(int(BG.lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) + (255,)
-            bg_layer = Image.new("RGBA", img.size, bg_color)
-            bg_layer.paste(img, mask=img.split()[3])
-            img = bg_layer.convert("RGB")
-            img.thumbnail((slot_w // 2, slot_h), Image.LANCZOS)
-            self._imu_board_photo = ImageTk.PhotoImage(img)
-            self._imu_board_label.configure(image=self._imu_board_photo)
-        except Exception:
-            self._imu_board_label.configure(text="[Board_Picture.png not found]",
-                                            fg=DARK, font=("", 9))
+                                           fg=DARK, font=("", 13))
 
     # ── Histogram update ───────────────────────────────────────────────────────
 
@@ -256,10 +252,10 @@ class ImuMixin:
                 ax.axvline(data.mean(), color=color, linewidth=1.2, linestyle="--")
                 plotted = True
 
-            ax.set_title(group_label, color=DARK, fontsize=9)
-            ax.set_ylabel("Count", color=DARK, fontsize=8)
+            ax.set_title(group_label, color=DARK, fontsize=13)
+            ax.set_ylabel("Count", color=DARK, fontsize=12)
             if plotted:
-                ax.legend(fontsize=7, facecolor=BG, edgecolor=DARK, labelcolor=DARK,
+                ax.legend(fontsize=10, facecolor=BG, edgecolor=DARK, labelcolor=DARK,
                           loc="upper right")
             w.style_ax(ax)
 

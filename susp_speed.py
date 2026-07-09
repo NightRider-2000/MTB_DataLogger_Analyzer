@@ -41,19 +41,24 @@ class SuspSpeedMixin:
             ax.clear()
             ax.set_facecolor(BG)
 
-        # Filter to valid sample intervals only (10–20 ms), screen-local
+        # Keep only rows at the nominal sample interval (within ±50% of the
+        # data's own median period — never a hardcoded rate). Drops multi-file
+        # concat gaps and any dropped-sample jumps.
         _dt_s  = self.cal_result_df.index.to_series().diff().dt.total_seconds()
-        _dt_ms = _dt_s * 1000
-        _mask  = _dt_ms.between(10, 20)
-        df = self.cal_result_df[_mask]
+        _period = w.sample_period_s(self.cal_result_df.index)
+        if _period:
+            _mask = _dt_s.between(0.5 * _period, 1.5 * _period)
+            df = self.cal_result_df[_mask]
+        else:
+            df = self.cal_result_df
 
         # Filter to rows where rear wheel speed > 4.5 mph (bike is moving)
         _rr_spd_col = "Rear_Horz_Wheel_Spd_mph"
         if _rr_spd_col in df.columns:
             df = df[df[_rr_spd_col] > 4.5]
 
-        col_front = "Front_Vert_Wheel_Spd_mmPs"
-        col_rear  = "Rear_Vert_Wheel_Spd_mmPs"
+        col_front = "Front_Vert_Wheel_Spd_mmps"
+        col_rear  = "Rear_Vert_Wheel_Spd_mmps"
 
         # ── Histograms ────────────────────────────────────────────────────────
         for ax_hist, col, label in [
@@ -88,10 +93,10 @@ class SuspSpeedMixin:
             ax_hist.set_xlim(0, 1200)
             handles, _ = ax_hist.get_legend_handles_labels()
             if handles:
-                ax_hist.legend(fontsize=7, facecolor=BG, edgecolor=DARK, labelcolor=DARK)
-            ax_hist.set_title(label, color=DARK, fontsize=9)
-            ax_hist.set_xlabel("mm/s", color=DARK, fontsize=8)
-            ax_hist.set_ylabel("Count", color=DARK, fontsize=8)
+                ax_hist.legend(fontsize=10, facecolor=BG, edgecolor=DARK, labelcolor=DARK)
+            ax_hist.set_title(label, color=DARK, fontsize=13)
+            ax_hist.set_xlabel("mm/s", color=DARK, fontsize=12)
+            ax_hist.set_ylabel("Count", color=DARK, fontsize=12)
             w.style_ax(ax_hist)
 
         # ── Scatter: original + time-aligned rear speed vs front speed ──────────
@@ -195,17 +200,19 @@ class SuspSpeedMixin:
 
             # Quadrant labels
             ax.text(0.76, 0.93, "Comp", transform=ax.transAxes,
-                    color=DARK, fontsize=9, ha="center", va="top",
+                    color=DARK, fontsize=13, ha="center", va="top",
                     fontweight="bold")
             ax.text(0.24, 0.07, "Rebound", transform=ax.transAxes,
-                    color=DARK, fontsize=9, ha="center", va="bottom",
+                    color=DARK, fontsize=13, ha="center", va="bottom",
                     fontweight="bold")
 
-            ax.legend(fontsize=7, facecolor=BG, edgecolor=DARK, labelcolor=DARK)
+            # upper left: "Comp"/"Rebound" quadrant labels occupy the other two corners
+            ax.legend(fontsize=10, facecolor=BG, edgecolor=DARK, labelcolor=DARK,
+                     loc="upper left")
 
-        ax.set_title("Front vs Rear Suspension Speed", color=DARK, fontsize=9)
-        ax.set_xlabel("Front Speed (mm/s)", color=DARK, fontsize=8)
-        ax.set_ylabel("Rear Speed (mm/s)", color=DARK, fontsize=8)
+        ax.set_title("Front vs Rear Suspension Speed", color=DARK, fontsize=13)
+        ax.set_xlabel("Front Speed (mm/s)", color=DARK, fontsize=12)
+        ax.set_ylabel("Rear Speed (mm/s)", color=DARK, fontsize=12)
         w.style_ax(ax)
 
         import warnings

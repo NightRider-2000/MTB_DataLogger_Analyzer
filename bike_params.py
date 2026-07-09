@@ -59,7 +59,7 @@ class BikeParamsMixin:
 
         def _pgrid_row(parent, row, label, default, unit, var_attr, entry_attr, callback=None):
             tk.Label(parent, text=label, bg=BG, fg=DARK,
-                     font=("", 10, "bold"), anchor="e").grid(
+                     font=("", 15, "bold"), anchor="e").grid(
                 row=row, column=0, sticky="e", padx=(0, 6), pady=3)
             e = w.make_entry(parent, width=_EW)
             e.insert(0, default)
@@ -82,12 +82,12 @@ class BikeParamsMixin:
                                "rear_susp_travel_var", "_rear_susp_travel_entry")
         entry_rwc = _pgrid_row(pgrid, 2, "Rear Wheel Circumference",   "91",  "in",
                                "rear_wheel_circ_var",  "_rear_wheel_circ_entry")
-        entry_rsc = _pgrid_row(pgrid, 3, "Rear Rotor Spoke Count",     "12",  "",
+        entry_rsc = _pgrid_row(pgrid, 3, "Rear Wheel Triggers/Rev",    "12",  "",
                                "rear_spoke_count_var", "_rear_spoke_count_entry")
 
         # Motion ratio section
         tk.Label(left, text="Rear Suspension Motion Ratio",
-                 bg=BG, fg=DARK, font=("", 10, "bold")).grid(row=1, column=0, sticky="s", pady=(6, 2))
+                 bg=BG, fg=DARK, font=("", 15, "bold")).grid(row=1, column=0, sticky="s", pady=(6, 2))
 
         btn_frame = tk.Frame(left, bg=BG)
         btn_frame.grid(row=2, column=0, sticky="w", pady=(0, 4))
@@ -104,6 +104,7 @@ class BikeParamsMixin:
         mr_tree.heading("Wheel_Vertical_Travel",  text="Wheel_Vertical_Travel")
         mr_tree.column("Shock_Travel",           width=100, anchor="center")
         mr_tree.column("Wheel_Vertical_Travel",  width=140, anchor="center")
+        w.enable_gridlines(mr_tree)
         mr_tree.tag_configure("even", background=FIELD,   foreground=DARK)
         mr_tree.tag_configure("odd",  background=ROW_ALT, foreground=DARK)
 
@@ -127,8 +128,8 @@ class BikeParamsMixin:
         ctr_grid = tk.Frame(centre, bg=BG)
         ctr_grid.pack(pady=(8, 0))
 
-        tk.Label(ctr_grid, text="Chain Ring Spokes", bg=BG, fg=DARK,
-                 font=("", 10, "bold"), anchor="e").grid(row=0, column=0, sticky="e", padx=(0, 6), pady=3)
+        tk.Label(ctr_grid, text="Crank Triggers/Rev", bg=BG, fg=DARK,
+                 font=("", 15, "bold"), anchor="e").grid(row=0, column=0, sticky="e", padx=(0, 6), pady=3)
         self.chain_ring_spokes_var = tk.StringVar(value="10")
         entry_crs = w.make_entry(ctr_grid, width=_EW)
         entry_crs.insert(0, "10")
@@ -139,7 +140,7 @@ class BikeParamsMixin:
         self._chain_ring_spokes_entry = entry_crs
 
         tk.Label(ctr_grid, text="Chain Ring Teeth", bg=BG, fg=DARK,
-                 font=("", 10, "bold"), anchor="e").grid(row=1, column=0, sticky="e", padx=(0, 6), pady=3)
+                 font=("", 15, "bold"), anchor="e").grid(row=1, column=0, sticky="e", padx=(0, 6), pady=3)
         self.chain_ring_teeth_var = tk.StringVar(value="30")
         entry_crt = w.make_entry(ctr_grid, width=_EW)
         entry_crt.insert(0, "30")
@@ -151,10 +152,10 @@ class BikeParamsMixin:
         self._chain_ring_teeth_entry = entry_crt
 
         tk.Label(ctr_grid, text="IMU Pitch Offset", bg=BG, fg=DARK,
-                 font=("", 10, "bold"), anchor="e").grid(row=2, column=0, sticky="e", padx=(0, 6), pady=3)
-        self.pitch_offset_var = tk.StringVar(value="30.5")
+                 font=("", 15, "bold"), anchor="e").grid(row=2, column=0, sticky="e", padx=(0, 6), pady=3)
+        self.pitch_offset_var = tk.StringVar(value="30")
         entry_po = w.make_entry(ctr_grid, width=_EW)
-        entry_po.insert(0, "30.5")
+        entry_po.insert(0, "30")
         entry_po.grid(row=2, column=1, pady=3)
         tk.Label(ctr_grid, text="deg", bg=BG, fg=DARK).grid(row=2, column=2, sticky="w", padx=(4, 0), pady=3)
         def _on_po_change(e):
@@ -177,7 +178,7 @@ class BikeParamsMixin:
 
         def _pgrid2_row(row, label, default, unit, var_attr, entry_attr, callback=None):
             tk.Label(pgrid2, text=label, bg=BG, fg=DARK,
-                     font=("", 10, "bold"), anchor="e").grid(
+                     font=("", 15, "bold"), anchor="e").grid(
                 row=row, column=0, sticky="e", padx=(0, 6), pady=3)
             e = w.make_entry(pgrid2, width=_EW)
             e.insert(0, default)
@@ -197,7 +198,7 @@ class BikeParamsMixin:
         entry2 = w.make_entry(pgrid2, width=_EW)
         entry2.insert(0, "150")
         tk.Label(pgrid2, text="Front Fork Max Travel", bg=BG, fg=DARK,
-                 font=("", 10, "bold"), anchor="e").grid(row=0, column=0, sticky="e", padx=(0, 6), pady=3)
+                 font=("", 15, "bold"), anchor="e").grid(row=0, column=0, sticky="e", padx=(0, 6), pady=3)
         entry2.grid(row=0, column=1, pady=3)
         tk.Label(pgrid2, text="mm", bg=BG, fg=DARK, anchor="w").grid(
             row=0, column=2, sticky="w", padx=(4, 0), pady=3)
@@ -207,7 +208,7 @@ class BikeParamsMixin:
         entry3 = w.make_entry(pgrid2, width=_EW)
         entry3.insert(0, "65")
         tk.Label(pgrid2, text="Head Tube Angle", bg=BG, fg=DARK,
-                 font=("", 10, "bold"), anchor="e").grid(row=1, column=0, sticky="e", padx=(0, 6), pady=3)
+                 font=("", 15, "bold"), anchor="e").grid(row=1, column=0, sticky="e", padx=(0, 6), pady=3)
         entry3.grid(row=1, column=1, pady=3)
         tk.Label(pgrid2, text="deg", bg=BG, fg=DARK, anchor="w").grid(
             row=1, column=2, sticky="w", padx=(4, 0), pady=3)
@@ -218,7 +219,7 @@ class BikeParamsMixin:
         entry_fst = w.make_entry(pgrid2, width=_EW)
         entry_fst.insert(0, f"{_default_fst:.2f}")
         tk.Label(pgrid2, text="Front Suspension Max Travel", bg=BG, fg=DARK,
-                 font=("", 10, "bold"), anchor="e").grid(row=2, column=0, sticky="e", padx=(0, 6), pady=3)
+                 font=("", 15, "bold"), anchor="e").grid(row=2, column=0, sticky="e", padx=(0, 6), pady=3)
         entry_fst.grid(row=2, column=1, pady=3)
         tk.Label(pgrid2, text="mm", bg=BG, fg=DARK, anchor="w").grid(
             row=2, column=2, sticky="w", padx=(4, 0), pady=3)
@@ -226,7 +227,7 @@ class BikeParamsMixin:
 
         entry_fwc = _pgrid2_row(3, "Front Wheel Circumference", "91", "in",
                                 "front_wheel_circ_var", "_front_wheel_circ_entry")
-        entry_fsc = _pgrid2_row(4, "Front Rotor Spoke Count",   "12", "",
+        entry_fsc = _pgrid2_row(4, "Front Wheel Triggers/Rev",  "12", "",
                                 "front_spoke_count_var", "_front_spoke_count_entry")
 
         # Callbacks for computed/linked fields
@@ -259,7 +260,7 @@ class BikeParamsMixin:
         cass_bot = tk.Frame(outer, bg=BG)
         cass_bot.grid(row=1, column=1, sticky="n", pady=(0, 10))
         tk.Label(cass_bot, text="Cassette", bg=BG, fg=DARK,
-                 font=("", 10, "bold")).pack(pady=(4, 2))
+                 font=("", 15, "bold")).pack(pady=(4, 2))
         cassette_frame = tk.Frame(cass_bot, bg=BG)
         cassette_frame.pack(anchor="center")
         cassette_tree = ttk.Treeview(cassette_frame, columns=("Gear", "Teeth"),
@@ -268,6 +269,7 @@ class BikeParamsMixin:
         cassette_tree.heading("Teeth", text="Teeth")
         cassette_tree.column("Gear",  width=60, anchor="center")
         cassette_tree.column("Teeth", width=60, anchor="center")
+        w.enable_gridlines(cassette_tree)
         cassette_tree.tag_configure("even", background=FIELD,   foreground=DARK)
         cassette_tree.tag_configure("odd",  background=ROW_ALT, foreground=DARK)
         for i, (gear, teeth) in enumerate(_DEFAULT_CASSETTE):
@@ -285,7 +287,7 @@ class BikeParamsMixin:
         wb_frame = tk.Frame(cass_bot, bg=BG)
         wb_frame.pack(pady=(6, 0))
         tk.Label(wb_frame, text="Wheel Base", bg=BG, fg=DARK,
-                 font=("", 10, "bold"), anchor="e").grid(row=0, column=0, sticky="e", padx=(0, 6), pady=3)
+                 font=("", 15, "bold"), anchor="e").grid(row=0, column=0, sticky="e", padx=(0, 6), pady=3)
         self.wheel_base_var = tk.StringVar(value="1242")
         entry_wb = w.make_entry(wb_frame, width=_EW)
         entry_wb.insert(0, "1242")
@@ -331,9 +333,9 @@ class BikeParamsMixin:
         ax.clear()
         ax.set_facecolor(BG)
         ax.plot(shock, wheel, color=DARK, linewidth=2)
-        ax.set_title("Rear Suspension Motion Ratio", color=DARK, fontsize=9)
-        ax.set_xlabel("Shock Travel (mm)",           color=DARK, fontsize=8)
-        ax.set_ylabel("Wheel Vertical Travel (mm)",  color=DARK, fontsize=8)
+        ax.set_title("Rear Suspension Motion Ratio", color=DARK, fontsize=13)
+        ax.set_xlabel("Shock Travel (mm)",           color=DARK, fontsize=12)
+        ax.set_ylabel("Wheel Vertical Travel (mm)",  color=DARK, fontsize=12)
         ax.tick_params(colors=DARK, labelsize=7)
         for spine in ax.spines.values():
             spine.set_edgecolor(DARK)

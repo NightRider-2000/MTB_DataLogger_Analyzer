@@ -21,6 +21,9 @@ MTB: protocol (device side in sd_transfer.cpp)
   MTB:GET:<f>\\n → MTB:SIZE:<n>\\nMTB:END\\n  (or MTB:ERR:…\\nMTB:END\\n)
                    then <n> raw bytes, then MTB:CRC32:<hex>\\nMTB:END\\n
   MTB:DEL:<f>\\n → MTB:OK\\nMTB:END\\n  or  MTB:ERR:…\\nMTB:END\\n
+  MTB:PUT:<f>:<size>\\n → MTB:READY\\n, host streams <size> raw bytes,
+                   then MTB:CRC32:<hex>\\nMTB:OK\\nMTB:END\\n
+                   (device stages in UPLOAD.TMP, atomic rename on success)
 """
 
 import os
@@ -39,11 +42,20 @@ try:
 except ImportError:
     _SERIAL_OK = False
 
-from constants import BG, DARK, FIELD, BTN_FG, GRID
+from constants import BG, DARK, FIELD, BTN_FG, GRID, TABLE_GRID
 import widgets as w
+
+# Runtime settings file in the Teensy SD root (firmware config_file.cpp).
+_CONFIG_FILENAME = "CONFIG.CSV"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def _dev_btn(parent, text, command):
+    """Device-tab button: compact 'Small.TButton' variant so the full button
+    rows (incl. Delete Selected) fit on screen."""
+    return w.make_btn(parent, text, command, style="Small.TButton")
+
 
 def _fmt_size(n_bytes):
     """Human-readable file size."""
@@ -53,6 +65,11 @@ def _fmt_size(n_bytes):
         return f"{n_bytes/1024:.1f} KB"
     else:
         return f"{n_bytes/1024/1024:.2f} MB"
+
+
+def _fmt_size_mb(n_bytes):
+    """File size always in MB with two decimals (file-list columns)."""
+    return f"{n_bytes/1024/1024:.2f} MB"
 
 
 def _fmt_date(ts):
@@ -110,20 +127,11 @@ class DeviceMixin:
             state="readonly", width=22)
         self._dev_port_combo.pack(side=tk.LEFT, padx=(4, 2))
 
-        w.make_btn(conn_bar, "⟳ Refresh Ports",
+        _dev_btn(conn_bar, "⟳ Refresh Ports",
                    self._dev_refresh_ports).pack(side=tk.LEFT, padx=2)
 
-        tk.Label(conn_bar, text="Baud:", bg=BG, fg=DARK).pack(
-            side=tk.LEFT, padx=(8, 0))
-        self._dev_baud_var = tk.StringVar(value="115200")
-        self._dev_baud_combo = ttk.Combobox(
-            conn_bar, textvariable=self._dev_baud_var,
-            state="readonly", width=10,
-            values=["9600", "19200", "38400", "57600", "115200",
-                    "230400", "460800", "921600", "1000000", "2000000"])
-        self._dev_baud_combo.pack(side=tk.LEFT, padx=(4, 2))
-
-        self._dev_connect_btn = w.make_btn(
+        # No baud selector: the Teensy 4.1 USB CDC ignores the host baud rate.
+        self._dev_connect_btn = _dev_btn(
             conn_bar, "Connect", self._dev_toggle_connect)
         self._dev_connect_btn.pack(side=tk.LEFT, padx=6)
 
@@ -158,19 +166,23 @@ class DeviceMixin:
     def _build_dashboard_panel(self, parent):
         frame = tk.Frame(parent, bg=BG)
         frame.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        frame.rowconfigure(1, weight=1)
+        # Left column split in thirds: config editor (top 1/3), dashboard (2/3)
+        frame.rowconfigure(1, weight=1)   # config table
+        frame.rowconfigure(3, weight=2)   # dashboard text
         frame.columnconfigure(0, weight=1)
 
+        self._build_config_panel(frame)
+
         hdr = tk.Frame(frame, bg=BG)
-        hdr.grid(row=0, column=0, sticky="ew")
+        hdr.grid(row=2, column=0, sticky="ew", pady=(6, 0))
         tk.Label(hdr, text="Serial Dashboard", bg=BG, fg=DARK,
-                 font=("TkDefaultFont", 10, "bold")).pack(side=tk.LEFT)
-        w.make_btn(hdr, "Clear", self._dev_clear_dashboard).pack(
+                 font=("TkDefaultFont", 15, "bold")).pack(side=tk.LEFT)
+        _dev_btn(hdr, "Clear", self._dev_clear_dashboard).pack(
             side=tk.RIGHT, padx=2)
 
         txt_frame = tk.Frame(frame, bg=FIELD,
                              highlightbackground=DARK, highlightthickness=1)
-        txt_frame.grid(row=1, column=0, sticky="nsew", pady=4)
+        txt_frame.grid(row=3, column=0, sticky="nsew", pady=4)
         txt_frame.rowconfigure(0, weight=1)
         txt_frame.columnconfigure(0, weight=1)
 
@@ -178,7 +190,7 @@ class DeviceMixin:
             txt_frame,
             bg=FIELD, fg=DARK, insertbackground=DARK,
             relief="flat", bd=0, wrap=tk.NONE,
-            font=("TkFixedFont", 9),
+            font=("TkFixedFont", 13),
             state=tk.DISABLED)
         self._dev_dashboard.grid(row=0, column=0, sticky="nsew")
 
@@ -190,6 +202,192 @@ class DeviceMixin:
         hsb.grid(row=1, column=0, sticky="ew")
         self._dev_dashboard.configure(yscrollcommand=vsb.set,
                                       xscrollcommand=hsb.set)
+
+    # ── device configuration panel (CONFIG.CSV editor) ────────────────────────
+
+    def _build_config_panel(self, parent):
+        hdr = tk.Frame(parent, bg=BG)
+        hdr.grid(row=0, column=0, sticky="ew")
+        tk.Label(hdr, text="Device Configuration", bg=BG, fg=DARK,
+                 font=("TkDefaultFont", 15, "bold")).pack(side=tk.LEFT)
+        _dev_btn(hdr, "⟳ Read Config",
+                 self._dev_read_config).pack(side=tk.LEFT, padx=(8, 2))
+        _dev_btn(hdr, "⬆ Upload Config",
+                 self._dev_upload_config).pack(side=tk.LEFT, padx=2)
+
+        # Word-wrapped table. ttk.Treeview cannot wrap cell text (single-line,
+        # one global rowheight), so this table is a custom scrollable grid of
+        # wrapping Labels + Entry cells: every cell (incl. headers) wraps, rows
+        # auto-size, only the Value column is editable, and the TABLE_GRID
+        # gridline rule is met by 1-px gaps over a TABLE_GRID background.
+        outer = tk.Frame(parent, bg=FIELD,
+                         highlightbackground=DARK, highlightthickness=1)
+        outer.grid(row=1, column=0, sticky="nsew", pady=4)
+        outer.rowconfigure(0, weight=1)
+        outer.columnconfigure(0, weight=1)
+
+        self._dev_cfg_canvas = tk.Canvas(outer, bg=FIELD, highlightthickness=0)
+        self._dev_cfg_canvas.grid(row=0, column=0, sticky="nsew")
+        cfg_vsb = ttk.Scrollbar(outer, orient=tk.VERTICAL,
+                                command=self._dev_cfg_canvas.yview)
+        cfg_vsb.grid(row=0, column=1, sticky="ns")
+        self._dev_cfg_canvas.configure(yscrollcommand=cfg_vsb.set)
+
+        # No horizontal scrollbar: cells word-wrap, so the grid is stretched to
+        # the canvas width instead (the Description column absorbs the slack).
+        self._dev_cfg_grid = tk.Frame(self._dev_cfg_canvas, bg=TABLE_GRID)
+        self._dev_cfg_win = self._dev_cfg_canvas.create_window(
+            (0, 0), window=self._dev_cfg_grid, anchor="nw")
+        self._dev_cfg_grid.bind(
+            "<Configure>",
+            lambda e: self._dev_cfg_canvas.configure(
+                scrollregion=self._dev_cfg_canvas.bbox("all")))
+        self._dev_cfg_canvas.bind(
+            "<Configure>",
+            lambda e: self._dev_cfg_canvas.itemconfigure(
+                self._dev_cfg_win,
+                width=max(e.width, self._dev_cfg_grid.winfo_reqwidth())))
+
+        # (column header text, pixel width)
+        self._dev_cfg_columns = [("Setting", 208), ("Value", 150),
+                                 ("Description", 372), ("Unit", 70)]
+        self._dev_cfg_rows = []   # [(key, value StringVar, description, unit)]
+        self._dev_cfg_populate([])
+
+    def _dev_cfg_populate(self, rows):
+        """Rebuild the config grid: a wrapped header row + one row per setting.
+        rows = [(key, value, description, unit), …]."""
+        grid = self._dev_cfg_grid
+        for child in grid.winfo_children():
+            child.destroy()
+        self._dev_cfg_rows = []
+
+        def _scroll(e):
+            self._dev_cfg_canvas.yview_scroll(-e.delta, "units")
+
+        def _cell(widget, r, c):
+            widget.grid(row=r, column=c, sticky="nsew",
+                        padx=(0, 1), pady=(0, 1))   # 1-px TABLE_GRID gridlines
+            widget.bind("<MouseWheel>", _scroll)
+
+        for c, (title, width) in enumerate(self._dev_cfg_columns):
+            # Description column flexes to fill the panel width (no h-scroll)
+            grid.columnconfigure(c, minsize=width, weight=1 if c == 2 else 0)
+            _cell(tk.Label(grid, text=title, bg=DARK, fg=BTN_FG,
+                           font="TableFont",
+                           wraplength=width - 10, justify="left", anchor="w",
+                           padx=4, pady=2), 0, c)
+
+        for r, (key, value, description, unit) in enumerate(rows, start=1):
+            var = tk.StringVar(value=value)
+            self._dev_cfg_rows.append((key, var, description, unit))
+            for c, text in ((0, key), (2, description), (3, unit)):
+                width = self._dev_cfg_columns[c][1]
+                _cell(tk.Label(grid, text=text, bg=FIELD, fg=DARK,
+                               font="TableFont",
+                               wraplength=width - 10, justify="left",
+                               anchor="nw", padx=4, pady=2), r, c)
+            entry = w.make_entry(grid)
+            entry.configure(textvariable=var, font="TableFont")
+            _cell(entry, r, 1)
+
+    # ── config read / upload ──────────────────────────────────────────────────
+
+    def _dev_read_config(self):
+        if not self._dev_connected:
+            messagebox.showwarning("Not Connected",
+                                   "Connect to the Teensy first.")
+            return
+        threading.Thread(target=self._dev_read_config_worker,
+                         daemon=True).start()
+
+    def _dev_read_config_worker(self):
+        try:
+            data, crc_ok = self._cmd_get(_CONFIG_FILENAME)
+        except Exception as e:
+            self.after(0, lambda e=e: self._dev_set_xfer(
+                f"Read Config error: {e}"))
+            return
+        rows = self._parse_config_csv(data.decode("ascii", errors="replace"))
+        def _update():
+            self._dev_cfg_populate(rows)
+            note = "" if crc_ok else "  (⚠ CRC mismatch)"
+            self._dev_set_xfer(
+                f"Read {_CONFIG_FILENAME}: {len(rows)} setting(s){note}")
+        self.after(0, _update)
+
+    @staticmethod
+    def _parse_config_csv(text):
+        """Parse CONFIG.CSV text → [(key, value, description, unit), …].
+        Skips '#' comments, blank lines, and the column-header row (same rules
+        as the firmware parser in config_file.cpp)."""
+        rows = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [p.strip() for p in line.split(",", 3)]
+            if parts[0] == "key":     # column-header row
+                continue
+            while len(parts) < 4:
+                parts.append("")
+            rows.append(tuple(parts[:4]))
+        return rows
+
+    def _dev_upload_config(self):
+        if not self._dev_connected:
+            messagebox.showwarning("Not Connected",
+                                   "Connect to the Teensy first.")
+            return
+        # No commas inside a field — the config file format requires it.
+        rows = [(key, var.get().strip().replace(",", " "), description, unit)
+                for key, var, description, unit in self._dev_cfg_rows]
+        if not rows:
+            messagebox.showwarning("No Config",
+                                   "Read the device config first.")
+            return
+        if not messagebox.askyesno(
+                "Upload Config",
+                f"Overwrite {_CONFIG_FILENAME} on the Teensy SD card with "
+                f"{len(rows)} setting(s)?\n\n"
+                "Settings fully apply on the next device boot."):
+            return
+        text = self._serialize_config_csv(rows)
+        threading.Thread(target=self._dev_upload_config_worker,
+                         args=(text,), daemon=True).start()
+
+    @staticmethod
+    def _serialize_config_csv(rows):
+        """Rebuild CONFIG.CSV text in the firmware's self-documenting format."""
+        lines = [
+            "# MTB_DAQ configuration. Edit only the 'value' column, save, reboot to apply.",
+            "# Lines starting with # are ignored. Only key + value are read by firmware;",
+            "# the description and unit columns are reference for you. No commas inside a field.",
+            "key,value,description,unit",
+        ]
+        for key, value, description, unit in rows:
+            lines.append(f"{key},{value},{description},{unit}")
+        return "\n".join(lines) + "\n"
+
+    def _dev_upload_config_worker(self, text):
+        data = text.encode("ascii", errors="replace")
+        self.after(0, lambda: self._dev_set_xfer(
+            f"Uploading {_CONFIG_FILENAME} ({len(data)} B)…"))
+        try:
+            crc_ok = self._cmd_put(_CONFIG_FILENAME, data)
+        except Exception as e:
+            self.after(0, lambda e=e: messagebox.showerror(
+                "Upload Error", f"{_CONFIG_FILENAME}: {e}"))
+            self.after(0, lambda: self._dev_set_xfer("Upload failed"))
+            return
+        if crc_ok:
+            self.after(0, lambda: self._dev_set_xfer(
+                f"Uploaded {_CONFIG_FILENAME} — reboot device to fully apply"))
+        else:
+            self.after(0, lambda: messagebox.showwarning(
+                "CRC Mismatch",
+                f"{_CONFIG_FILENAME} uploaded but the device's CRC did not "
+                "match. Re-upload recommended."))
 
     # ── files panel ───────────────────────────────────────────────────────────
 
@@ -204,8 +402,11 @@ class DeviceMixin:
         sd_hdr = tk.Frame(frame, bg=BG)
         sd_hdr.grid(row=0, column=0, sticky="ew")
         tk.Label(sd_hdr, text="Teensy SD Files", bg=BG, fg=DARK,
-                 font=("TkDefaultFont", 10, "bold")).pack(side=tk.LEFT)
-        w.make_btn(sd_hdr, "⟳ Refresh SD",
+                 font=("TkDefaultFont", 15, "bold")).pack(side=tk.LEFT)
+        # Packed RIGHT first → rightmost, so it sits to the right of Refresh SD.
+        _dev_btn(sd_hdr, "🗑 Delete from SD",
+                   self._dev_delete_selected).pack(side=tk.RIGHT, padx=2)
+        _dev_btn(sd_hdr, "⟳ Refresh SD",
                    self._dev_refresh_sd).pack(side=tk.RIGHT, padx=2)
 
         sd_tree_frame = tk.Frame(frame, bg=FIELD,
@@ -222,7 +423,9 @@ class DeviceMixin:
         self._dev_sd_tree.heading("name", text="Filename")
         self._dev_sd_tree.heading("size", text="Size")
         self._dev_sd_tree.column("name", width=220, stretch=True)
-        self._dev_sd_tree.column("size", width=80, anchor="e", stretch=False)
+        self._dev_sd_tree.column("size", width=130, minwidth=110, anchor="e",
+                                 stretch=False)
+        w.enable_gridlines(self._dev_sd_tree)
         self._dev_sd_tree.grid(row=0, column=0, sticky="nsew")
 
         sd_vsb = ttk.Scrollbar(sd_tree_frame, orient=tk.VERTICAL,
@@ -233,29 +436,27 @@ class DeviceMixin:
         # SD action buttons
         sd_btns = tk.Frame(frame, bg=BG)
         sd_btns.grid(row=2, column=0, sticky="ew", pady=(0, 6))
-        w.make_btn(sd_btns, "Select All",
+        _dev_btn(sd_btns, "Select All",
                    self._dev_select_all_sd).pack(side=tk.LEFT, padx=(0, 4))
-        w.make_btn(sd_btns, "Clear Selection",
+        _dev_btn(sd_btns, "Clear Selection",
                    self._dev_clear_sd_selection).pack(side=tk.LEFT, padx=(0, 12))
-        w.make_btn(sd_btns, "⬇ Download Selected",
+        _dev_btn(sd_btns, "⬇ Download Selected",
                    self._dev_download_selected).pack(side=tk.LEFT, padx=(0, 4))
-        self._dev_cancel_btn = w.make_btn(
+        self._dev_cancel_btn = _dev_btn(
             sd_btns, "✖ Cancel Download", self._dev_cancel_download)
         self._dev_cancel_btn.pack(side=tk.LEFT, padx=(0, 12))
         self._dev_cancel_btn.configure(state=tk.DISABLED)
-        w.make_btn(sd_btns, "🗑 Delete Selected",
-                   self._dev_delete_selected).pack(side=tk.LEFT)
 
         # ── Host files ────────────────────────────────────────────────────────
         host_hdr = tk.Frame(frame, bg=BG)
         host_hdr.grid(row=3, column=0, sticky="ew")
         tk.Label(host_hdr, text="Host Files", bg=BG, fg=DARK,
-                 font=("TkDefaultFont", 10, "bold")).pack(side=tk.LEFT)
+                 font=("TkDefaultFont", 15, "bold")).pack(side=tk.LEFT)
         self._dev_host_dir_var = tk.StringVar(value=self._source_dir)
         tk.Label(host_hdr, textvariable=self._dev_host_dir_var,
-                 bg=BG, fg=GRID, font=("TkFixedFont", 8)).pack(
+                 bg=BG, fg=GRID, font=("TkFixedFont", 12)).pack(
             side=tk.LEFT, padx=6)
-        w.make_btn(host_hdr, "⟳ Refresh",
+        _dev_btn(host_hdr, "⟳ Refresh",
                    self._dev_refresh_host).pack(side=tk.RIGHT, padx=2)
 
         host_tree_frame = tk.Frame(frame, bg=FIELD,
@@ -273,9 +474,11 @@ class DeviceMixin:
         self._dev_host_tree.heading("size", text="Size")
         self._dev_host_tree.heading("date", text="Modified")
         self._dev_host_tree.column("name", width=200, stretch=True)
-        self._dev_host_tree.column("size", width=80, anchor="e", stretch=False)
+        self._dev_host_tree.column("size", width=130, minwidth=110, anchor="e",
+                                   stretch=False)
         self._dev_host_tree.column("date", width=130, anchor="center",
                                    stretch=False)
+        w.enable_gridlines(self._dev_host_tree)
         self._dev_host_tree.grid(row=0, column=0, sticky="nsew")
 
         host_vsb = ttk.Scrollbar(host_tree_frame, orient=tk.VERTICAL,
@@ -293,7 +496,7 @@ class DeviceMixin:
         self._dev_xfer_var = tk.StringVar(value="")
         tk.Label(frame, textvariable=self._dev_xfer_var,
                  bg=BG, fg=DARK, anchor="w",
-                 font=("TkFixedFont", 9)).grid(
+                 font=("TkFixedFont", 13)).grid(
             row=6, column=0, sticky="ew")
 
         # Populate host list immediately
@@ -305,7 +508,15 @@ class DeviceMixin:
         if not _SERIAL_OK:
             self._dev_port_combo["values"] = ["pyserial not installed"]
             return
-        ports = [p.device for p in serial.tools.list_ports.comports()]
+        # macOS (and some Linux setups) always list non-device virtual ports
+        # alongside real ones — e.g. /dev/cu.Bluetooth-Incoming-Port and
+        # /dev/cu.debug-console — which never have USB device info and can
+        # never actually connect. Real USB serial devices (Teensy included)
+        # always report a hwid with USB VID:PID; virtual ports report "n/a".
+        ports = [p.device for p in serial.tools.list_ports.comports()
+                 if p.hwid and p.hwid != "n/a"
+                 and "bluetooth" not in p.device.lower()
+                 and "debug" not in p.device.lower()]
         # Prefer ports that look like Teensy (ACM / usbmodem)
         ports.sort(key=lambda p: (
             0 if ("ACM" in p or "usbmodem" in p or "COM" in p) else 1, p))
@@ -328,10 +539,8 @@ class DeviceMixin:
         if not port or port.startswith("("):
             messagebox.showwarning("No Port", "Select a serial port first.")
             return
-        try:
-            baud = int(self._dev_baud_var.get())
-        except (ValueError, AttributeError):
-            baud = 115200
+        # Teensy 4.1 USB CDC ignores the requested baud; 115200 is nominal.
+        baud = 115200
         try:
             self._serial = serial.Serial(port, baudrate=baud, timeout=2)
             time.sleep(0.1)
@@ -343,8 +552,7 @@ class DeviceMixin:
 
         self._dev_connected = True
         self._dev_connect_btn.configure(text="Disconnect")
-        self._dev_baud_combo.configure(state="disabled")
-        self._dev_status_var.set(f"Connected: {port} @ {baud} baud")
+        self._dev_status_var.set(f"Connected: {port}")
 
         # Start background reader thread
         self._reader_running = True
@@ -365,7 +573,6 @@ class DeviceMixin:
             self._serial = None
         self._dev_connected   = False
         self._dev_connect_btn.configure(text="Connect")
-        self._dev_baud_combo.configure(state="readonly")
         self._dev_status_var.set("Not connected")
 
     # ── background reader ─────────────────────────────────────────────────────
@@ -426,7 +633,8 @@ class DeviceMixin:
             for item in self._dev_sd_tree.get_children():
                 self._dev_sd_tree.delete(item)
             for name, size in sorted(files):
-                self._dev_sd_tree.insert("", tk.END, values=(name, _fmt_size(size)))
+                self._dev_sd_tree.insert("", tk.END,
+                                         values=(name, _fmt_size_mb(size)))
             self._dev_set_xfer(f"{len(files)} file(s) on SD")
         self.after(0, _update)
 
@@ -459,7 +667,7 @@ class DeviceMixin:
         for fname, fsize, fmtime in entries:
             self._dev_host_tree.insert(
                 "", tk.END,
-                values=(fname, _fmt_size(fsize), _fmt_date(fmtime)))
+                values=(fname, _fmt_size_mb(fsize), _fmt_date(fmtime)))
 
     # ── download ──────────────────────────────────────────────────────────────
 
@@ -711,6 +919,51 @@ class DeviceMixin:
         actual_crc = zlib.crc32(bytes(data)) & 0xFFFFFFFF
         crc_ok = (expected_crc is not None) and (actual_crc == expected_crc)
         return bytes(data), crc_ok
+
+    def _cmd_put(self, filename, data):
+        """
+        Send MTB:PUT:<filename>:<size>; wait for MTB:READY; stream raw bytes;
+        verify the device's CRC32 against ours. The device stages the bytes in
+        a temp file and atomically renames, so a failed upload never corrupts
+        the existing file. Returns crc_ok; raises on protocol/device error.
+        """
+        with self._serial_lock:
+            self._serial.reset_input_buffer()
+            self._serial.write(f"MTB:PUT:{filename}:{len(data)}\n".encode())
+            self._serial.flush()
+
+            # Wait for the device to accept the command
+            while True:
+                line = self._cmd_readline()
+                if line == "MTB:READY":
+                    break
+                if line.startswith("MTB:ERR:"):
+                    raise RuntimeError(line[8:])
+                # Skip dashboard lines
+
+            for off in range(0, len(data), 4096):
+                self._serial.write(data[off:off + 4096])
+            self._serial.flush()
+
+            device_crc, ok = None, False
+            while True:
+                line = self._cmd_readline(timeout=15.0)
+                if line.startswith("MTB:CRC32:"):
+                    try:
+                        device_crc = int(line[10:], 16)
+                    except ValueError:
+                        pass
+                elif line == "MTB:OK":
+                    ok = True
+                elif line.startswith("MTB:ERR:"):
+                    raise RuntimeError(line[8:])
+                elif line == "MTB:END":
+                    break
+
+        if not ok:
+            raise RuntimeError("device did not confirm the upload")
+        local_crc = zlib.crc32(data) & 0xFFFFFFFF
+        return device_crc is not None and device_crc == local_crc
 
     def _cmd_del(self, filename):
         """Send MTB:DEL:<filename>; raise RuntimeError on failure."""

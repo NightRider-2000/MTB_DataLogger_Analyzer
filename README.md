@@ -41,7 +41,7 @@ A desktop application for loading, calibrating, and visualizing mountain bike su
 ```bash
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install pandas matplotlib pillow
+pip install pandas matplotlib pillow scipy pyserial
 ```
 
 ### Run

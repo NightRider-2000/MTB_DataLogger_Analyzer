@@ -20,10 +20,10 @@ class SagMixin:
         # Row labels
         self.fig_sag.text(0.01, 0.73, "Front Suspension",
                           rotation=90, va="center", ha="center",
-                          color=DARK, fontsize=10, fontweight="bold")
+                          color=DARK, fontsize=15, fontweight="bold")
         self.fig_sag.text(0.01, 0.27, "Rear Suspension",
                           rotation=90, va="center", ha="center",
-                          color=DARK, fontsize=10, fontweight="bold")
+                          color=DARK, fontsize=15, fontweight="bold")
 
         self.canvas_sag, cv_widget = w.make_canvas(self.fig_sag, frame)
         cv_widget.pack(fill=tk.BOTH, expand=True)
@@ -39,15 +39,15 @@ class SagMixin:
 
         # Row 0 — Front Suspension
         _sag_plot(self.axes_sag[0][0], self.cal_result_df, "Fork_Pos_mm")
-        _sag_plot(self.axes_sag[0][1], self.cal_result_df, "Fork_Pos_perc")
-        _sag_plot(self.axes_sag[0][2], self.cal_result_df, "Front_Wheel_Pos_perc")
-        _sag_plot(self.axes_sag[0][3], self.cal_result_df, "Front_Wheel_Pos_perc", zoom_p90=True)
+        _sag_plot(self.axes_sag[0][1], self.cal_result_df, "Fork_Pos_Perc")
+        _sag_plot(self.axes_sag[0][2], self.cal_result_df, "Front_Wheel_Pos_Perc")
+        _sag_plot(self.axes_sag[0][3], self.cal_result_df, "Front_Wheel_Pos_Perc", zoom_p90=True)
 
         # Row 1 — Rear Suspension
         _sag_plot(self.axes_sag[1][0], self.cal_result_df, "Shock_Pos_mm")
-        _sag_plot(self.axes_sag[1][1], self.cal_result_df, "Shock_Pos_perc")
-        _sag_plot(self.axes_sag[1][2], self.cal_result_df, "Rear_Wheel_Pos_perc")
-        _sag_plot(self.axes_sag[1][3], self.cal_result_df, "Rear_Wheel_Pos_perc", zoom_p90=True)
+        _sag_plot(self.axes_sag[1][1], self.cal_result_df, "Shock_Pos_Perc")
+        _sag_plot(self.axes_sag[1][2], self.cal_result_df, "Rear_Wheel_Pos_Perc")
+        _sag_plot(self.axes_sag[1][3], self.cal_result_df, "Rear_Wheel_Pos_Perc", zoom_p90=True)
 
         for ax in self.axes_sag.flat:
             w.style_ax(ax)
@@ -60,11 +60,11 @@ class SagMixin:
 
 def _sag_plot(ax, df, col, zoom_p90=False):
     if col not in df.columns:
-        ax.set_title(col, color=DARK, fontsize=8)
+        ax.set_title(col, color=DARK, fontsize=12)
         return
     data = df[col].dropna()
     if data.empty:
-        ax.set_title(col, color=DARK, fontsize=8)
+        ax.set_title(col, color=DARK, fontsize=12)
         return
     import numpy as np
     color = HIST_BAR_COLOR
@@ -77,7 +77,7 @@ def _sag_plot(ax, df, col, zoom_p90=False):
     ax.axvspan(mean - std, mean + std, alpha=0.12, color=color)
     ax.text(0.97, 0.97,
             f"{col}\n  mean={mean:.4g}\n  med ={med:.4g}\n  std ={std:.4g}\n  min ={mn:.4g}\n  max ={mx:.4g}",
-            transform=ax.transAxes, fontsize=7,
+            transform=ax.transAxes, fontsize=10,
             verticalalignment="top", horizontalalignment="right", color=DARK,
             bbox=dict(boxstyle="round,pad=0.4", facecolor=BG, edgecolor=GRID, alpha=0.9))
     if zoom_p90:
@@ -89,8 +89,8 @@ def _sag_plot(ax, df, col, zoom_p90=False):
         title = f"{col} (≥98th pctile)"
     else:
         title = col
-    ax.set_title(title, color=DARK, fontsize=8)
-    ax.set_xlabel("Value", color=DARK, fontsize=7)
-    ax.set_ylabel("Count", color=DARK, fontsize=7)
+    ax.set_title(title, color=DARK, fontsize=12)
+    ax.set_xlabel("Value", color=DARK, fontsize=10)
+    ax.set_ylabel("Count", color=DARK, fontsize=10)
 
 

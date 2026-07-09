@@ -135,7 +135,7 @@ class FreePlotMixin:
                 self.ax_fp.fill_between(bc, bm - bs, bm + bs,
                                         alpha=0.20, color=BIN_MEAN_COLOR, label="±1σ")
 
-        self.ax_fp.legend(fontsize=8, facecolor=BG, edgecolor=DARK, labelcolor=DARK)
+        self.ax_fp.legend(fontsize=12, facecolor=BG, edgecolor=DARK, labelcolor=DARK)
         self.ax_fp.set_xlabel(x_col, color=DARK)
         self.ax_fp.set_ylabel(y_col, color=DARK)
         self.ax_fp.set_title(f"{y_col} vs {x_col}", color=DARK)

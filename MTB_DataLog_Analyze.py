@@ -5,7 +5,20 @@ import os
 import tkinter as tk
 from tkinter import ttk
 
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from constants import FONT_SCALE, FONT_DELTA
+# Scale matplotlib's base font size (relative sizes like 'large'/'medium' cascade
+# from it). Explicit fontsize= calls in the plot modules are scaled at source.
+matplotlib.rcParams["font.size"] = (
+    matplotlib.rcParams["font.size"] * FONT_SCALE + FONT_DELTA)
+# legend(loc=...) defaults to "best", which searches candidate positions against
+# every plotted artist to avoid overlapping data — with a few hundred thousand
+# points per axes (240 Hz rides) this alone took ~0.7s per legend, dominating
+# tab-redraw time. A fixed corner is instant. Call sites whose corner would
+# collide with a fixed on-axes annotation (e.g. a stats box) pass an explicit
+# loc= to override this default — see those files for the specific corner.
+matplotlib.rcParams["legend.loc"] = "upper right"
+
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from constants import BG, DARK, GRID, CAL_FIELDS
 from theme import setup_theme
@@ -21,17 +34,24 @@ from free_histogram import FreeHistogramMixin
 from time_series import TimeSeriesMixin
 from frequency import FrequencyMixin
 from imu import ImuMixin
+from gps import GpsMixin
 from device import DeviceMixin
 
 
-class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParamsMixin, SagMixin, SuspSpeedMixin, FreePlotMixin, FreeHistogramMixin, TimeSeriesMixin, FrequencyMixin, ImuMixin, tk.Tk):
+class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixin, BikeParamsMixin, GpsMixin, SagMixin, SuspSpeedMixin, FreePlotMixin, FreeHistogramMixin, TimeSeriesMixin, FrequencyMixin, ImuMixin, tk.Tk):
 
     # ── Init ─────────────────────────────────────────────────────────────────
     def __init__(self):
         super().__init__()
         self.title("MountainBike_Logger_Analysis")
+        # Start full-screen; size geometry to the full display as a fallback for
+        # any platform where the -fullscreen attribute is ignored.
         screen_w = self.winfo_screenwidth()
-        self.geometry(f"{screen_w}x700")
+        screen_h = self.winfo_screenheight()
+        self.geometry(f"{screen_w}x{screen_h}+0+0")
+        self.attributes("-fullscreen", True)
+        # Esc exits full-screen so the user is never trapped without a title bar.
+        self.bind("<Escape>", lambda e: self.attributes("-fullscreen", False))
         self.configure(bg=BG)
 
         self.df                 = None
@@ -39,8 +59,10 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
         self.cal_result_df      = None
         self.saved_calibrations = []
         self.cal_file_path      = None
-        self._source_dir        = os.path.expanduser("~/Documents/MTB_DAQ/Archived_Data")
+        self._log_config        = {}    # #CFG header block from the loaded CSV(s)
+        self._source_dir        = os.path.expanduser("~/Documents/MTB_DAQ")
         self._download_paths    = []
+        self._entries           = []
 
         setup_theme(self)
         self._build_ui()
@@ -72,6 +94,10 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
         self.calibration_tab = tk.Frame(nb, bg=BG)
         nb.add(self.calibration_tab, text="Signal Calibration")
         self._build_calibration_tab()
+
+        self.gps_tab = tk.Frame(nb, bg=BG)
+        nb.add(self.gps_tab, text="GPS")
+        self._build_gps_tab()
 
         self.imu_tab = tk.Frame(nb, bg=BG)
         nb.add(self.imu_tab, text="IMU")
@@ -105,7 +131,8 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
     def _build_import_tab(self):
         top = tk.Frame(self.signals_tab, bg=BG)
         top.pack(side=tk.TOP, fill=tk.X)
-        w.make_btn(top, "Load Files Selected",     self.load_selected_files).pack(side=tk.LEFT, padx=5, pady=5)
+        w.make_btn(top, "Refresh File List",       self.refresh_file_list).pack(side=tk.LEFT, padx=5, pady=5)
+        w.make_btn(top, "⬆ Up",                    self.go_up_dir).pack(side=tk.LEFT, padx=5, pady=5)
         w.make_btn(top, "Change Source Directory", self.change_source_dir).pack(side=tk.LEFT, padx=5, pady=5)
         w.make_btn(top, "Delete File",             self.delete_selected_file).pack(side=tk.LEFT, padx=5, pady=5)
 
@@ -130,16 +157,33 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
         file_sec.grid(row=0, column=0, sticky="nsew")
         file_sec.columnconfigure(0, weight=1)
         file_sec.rowconfigure(2, weight=1)
-        tk.Label(file_sec, text="Available Files:", bg=BG, fg=DARK).grid(
+        tk.Label(file_sec, text="Available Files (double-click a 📁 folder to open):", bg=BG, fg=DARK).grid(
             row=0, column=0, sticky="w", padx=5, pady=(5, 0))
         self._source_dir_var = tk.StringVar(value=self._source_dir)
         tk.Label(file_sec, textvariable=self._source_dir_var,
-                 bg=BG, fg=GRID, font=("TkFixedFont", 8),
+                 bg=BG, fg=GRID, font=("TkFixedFont", 12),
                  anchor="w", wraplength=0).grid(
             row=1, column=0, sticky="ew", padx=5, pady=(0, 2))
-        self.file_listbox = w.make_listbox(file_sec, selectmode=tk.EXTENDED)
-        self.file_listbox.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
-        self.file_listbox.bind("<<ListboxSelect>>", self.on_file_select)
+        file_tree_frame = tk.Frame(file_sec, bg=BG)
+        file_tree_frame.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
+        file_tree_frame.rowconfigure(0, weight=1)
+        file_tree_frame.columnconfigure(0, weight=1)
+        self.file_listbox = ttk.Treeview(
+            file_tree_frame, columns=("name", "size"),
+            show="headings", selectmode="extended")
+        self.file_listbox.heading("name", text="Name")
+        self.file_listbox.heading("size", text="Size")
+        self.file_listbox.column("name", width=240, stretch=True)
+        self.file_listbox.column("size", width=110, minwidth=90, anchor="e",
+                                 stretch=False)
+        w.enable_gridlines(self.file_listbox)
+        self.file_listbox.grid(row=0, column=0, sticky="nsew")
+        file_vsb = ttk.Scrollbar(file_tree_frame, orient=tk.VERTICAL,
+                                 command=self.file_listbox.yview)
+        file_vsb.grid(row=0, column=1, sticky="ns")
+        self.file_listbox.configure(yscrollcommand=file_vsb.set)
+        self.file_listbox.bind("<<TreeviewSelect>>", self.on_file_select)
+        self.file_listbox.bind("<Double-Button-1>", self.on_file_double_click)
         self._populate_file_list()
 
         # Signal selector (bottom half)
@@ -154,12 +198,13 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
         self.signal_listbox.bind("<<ListboxSelect>>", self.on_signal_select)
 
     def _build_plots_panel(self, parent):
+        # Just a quick overview of the loaded data — no zoom/pan/save toolbar;
+        # a plain time-series + histogram is enough for a glance at a ride.
         plots = tk.Frame(parent, bg=BG)
         plots.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
         plots.columnconfigure(0, weight=1)
         plots.rowconfigure(0, weight=1)
         plots.rowconfigure(1, weight=1)
-        plots.rowconfigure(2, weight=0)
 
         self.fig = w.make_figure(figsize=(8, 3), dpi=100)
         self.ax  = self.fig.add_subplot(111)
@@ -174,12 +219,6 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
         self.canvas_hist, hist_widget = w.make_canvas(self.fig_hist, plots)
         hist_widget.grid(row=1, column=0, sticky="nsew")
 
-        tb_frame = tk.Frame(plots, bg=BG)
-        tb_frame.grid(row=2, column=0, sticky="ew")
-        self.toolbar = NavigationToolbar2Tk(self.canvas, tb_frame)
-        self.toolbar.config(background=BG)
-        self.toolbar.update()
-
     # ── Calibration Settings tab ─────────────────────────────────────────────
     def _build_calibration_tab(self):
         frame = tk.Frame(self.calibration_tab, bg=BG)
@@ -187,9 +226,22 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
         frame.columnconfigure(0, weight=0)
         frame.columnconfigure(1, weight=1)
         frame.columnconfigure(2, weight=3)
-        frame.rowconfigure(7, weight=1)
+        frame.rowconfigure(8, weight=1)
 
-        # Form: signal combo + entry fields
+        # Action bar — the ONLY way form edits take effect. Nothing below
+        # recomputes or redraws automatically on keystroke; edits sit in the
+        # form until this button is pressed.
+        action_bar = tk.Frame(frame, bg=BG)
+        action_bar.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        w.make_btn(action_bar, "Apply Updates",
+                   self.apply_calibration_updates).pack(side=tk.LEFT, padx=(0, 12))
+        w.make_btn(action_bar, "Auto-Cal Fork (Zero Min)",
+                   self.auto_calibrate_fork).pack(side=tk.LEFT, padx=(0, 6))
+        w.make_btn(action_bar, "Auto-Cal Shock (Zero Min)",
+                   self.auto_calibrate_shock).pack(side=tk.LEFT, padx=(0, 6))
+
+        # Form: signal combo + entry fields. Editing these does nothing on its
+        # own — click "Apply Updates" above to commit and recompute.
         form_rows = [
             ("Signal to calibrate",        None),
             ("Raw Signal at Min",             "raw_min_entry"),
@@ -199,7 +251,7 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
             ("Bias",                       "bias_entry"),
             ("New Calibrated Signal Name", "new_signal_entry"),
         ]
-        for row, (label, attr) in enumerate(form_rows):
+        for row, (label, attr) in enumerate(form_rows, start=1):
             tk.Label(frame, text=label, bg=BG, fg=DARK).grid(row=row, column=0, sticky="w")
             if attr is None:
                 self.cal_signal_var   = tk.StringVar()
@@ -208,32 +260,33 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
                 self.cal_signal_combo.bind("<<ComboboxSelected>>", self._update_cal_plots)
             elif attr == "new_signal_entry":
                 _cal_names = [
-                    "Fork_Pos_mm", "Shock_Pos_mm", "Board_SoC",
-                    "aX_g", "aY_g", "aZ_g", "gX_dps", "gY_dps", "gZ_dps", "mX_uT", "mY_uT", "mZ_uT",
-                    "Board_Temp_degC", "Front_Horz_Wheel_Spd_mph", "Rear_Horz_Wheel_Spd_mph",
-                    "Crank_Spd_rpm", "Req_Freq_Hz",
+                    "Fork_Pos_mm", "Shock_Pos_mm", "Batt_SoC", "Board_Temp_C",
+                    "aX_g", "aY_g", "aZ_g", "gX_DPS", "gY_DPS", "gZ_DPS",
+                    "Front_Horz_Wheel_Spd_mph", "Rear_Horz_Wheel_Spd_mph", "Crank_Spd_RPM",
+                    "BLE_Power_W", "BLE_Cadence_RPM",
                 ]
                 widget = ttk.Combobox(frame, values=_cal_names, state="readonly", width=20)
                 widget.grid(row=row, column=1, sticky="w", padx=5, pady=2)
-                widget.bind("<<ComboboxSelected>>", self._sync_form_to_table)
                 setattr(self, attr, widget)
             else:
                 widget = w.make_entry(frame, width=20)
                 widget.grid(row=row, column=1, sticky="w", padx=5, pady=2)
-                widget.bind("<KeyRelease>", self._sync_form_to_table)
                 setattr(self, attr, widget)
 
-        # Saved calibrations treeview
+        # Saved calibrations treeview. ttk Treeview headings can't wrap text
+        # onto 2 lines (embedded "\n" is drawn as a single line regardless of
+        # heading-row height — confirmed, not a styling issue) — so headers
+        # are short, no-underscore abbreviations that fit on one line instead.
         col_defs = [
-            ("Signal",          "Signal",          90),
-            ("Calibrated_Name", "Calibrated_Name", 110),
-            ("Raw_Sig_Min",     "Raw_Sig_Min",      80),
-            ("Raw_Sig_Max",     "Raw_Sig_Max",      80),
-            ("Value_at_Min",    "Value_at_Min",     80),
-            ("Value_at_Max",    "Value_at_Max",     80),
-            ("Bias",            "Bias",             60),
-            ("Calibrated_Min",  "Calibrated_Min",   90),
-            ("Calibrated_Max",  "Calibrated_Max",   90),
+            ("Signal",          "Signal",   90),
+            ("Calibrated_Name", "Cal. Name", 110),
+            ("Raw_Sig_Min",     "Raw Min",   85),
+            ("Raw_Sig_Max",     "Raw Max",   85),
+            ("Value_at_Min",    "Val Min",   80),
+            ("Value_at_Max",    "Val Max",   80),
+            ("Bias",            "Bias",      60),
+            ("Calibrated_Min",  "Cal Min",   90),
+            ("Calibrated_Max",  "Cal Max",   90),
         ]
         # col_id_order must match CAL_FIELDS exactly for positional value alignment
         col_id_order = list(CAL_FIELDS)
@@ -242,16 +295,17 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
         for col_id, col_text, col_width in col_defs:
             self.cal_tree.heading(col_id, text=col_text)
             self.cal_tree.column(col_id, width=col_width, minwidth=col_width, anchor="center")
+        w.enable_gridlines(self.cal_tree)
 
         tree_scroll = ttk.Scrollbar(frame, orient="horizontal", command=self.cal_tree.xview)
         self.cal_tree.configure(xscrollcommand=tree_scroll.set)
-        self.cal_tree.grid(row=7, column=0, columnspan=2, padx=5, pady=(5, 0), sticky="nsew")
-        tree_scroll.grid(row=8, column=0, columnspan=2, padx=5, sticky="ew")
+        self.cal_tree.grid(row=8, column=0, columnspan=2, padx=5, pady=(5, 0), sticky="nsew")
+        tree_scroll.grid(row=9, column=0, columnspan=2, padx=5, sticky="ew")
         self.cal_tree.bind("<<TreeviewSelect>>", self.on_cal_tree_select)
 
         # Persistence buttons
         persist = tk.Frame(frame, bg=BG)
-        persist.grid(row=9, column=0, columnspan=2, pady=4, sticky="w")
+        persist.grid(row=10, column=0, columnspan=2, pady=4, sticky="w")
         for text, cmd in [
             ("Load CSV", self.load_cal_file),
             ("Save CSV", self.save_cal_file),
@@ -260,7 +314,7 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
 
         # Preview: raw (top) + calibrated (middle) + calibrated histogram (bottom)
         cal_plot_frame = tk.Frame(frame, bg=BG)
-        cal_plot_frame.grid(row=0, column=2, rowspan=10, padx=10, pady=5, sticky="nsew")
+        cal_plot_frame.grid(row=0, column=2, rowspan=11, padx=10, pady=5, sticky="nsew")
         self.fig_cal      = w.make_figure(figsize=(4, 7), dpi=100)
         self.ax_raw_cal   = self.fig_cal.add_subplot(311)
         self.ax_raw_cal.set_facecolor(BG)
