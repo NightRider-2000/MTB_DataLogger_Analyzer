@@ -1,7 +1,7 @@
 import warnings
 
 import widgets as w
-from constants import BG, DARK, HIST_BAR_COLOR, HIST_COLORS, GRID
+from constants import BG, DARK, HIST_BAR_COLOR, HIST_COLORS, GRID, HIST_BINS
 
 
 class PlotsMixin:
@@ -65,14 +65,17 @@ class PlotsMixin:
             self.canvas_hist.draw()
             return
 
+        # Gather valid signals, then bin every overlaid histogram on the SAME
+        # edges (rule: 2+ histograms on one Axes share bins — see plot_hist_line).
+        pairs = [(c, self.df[c].dropna()) for c in columns]
+        pairs = [(c, d) for c, d in pairs if not d.empty]
+        edges = (w.shared_bin_edges([d.values for _, d in pairs], HIST_BINS)
+                 if pairs else HIST_BINS)
         stats_lines = []
-        for i, col in enumerate(columns):
+        for i, (col, data) in enumerate(pairs):
             color = HIST_BAR_COLOR
-            data  = self.df[col].dropna()
-            if data.empty:
-                continue
             mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
-            self.ax_hist.hist(data, bins=200, alpha=0.45, color=color, label=col)
+            w.plot_hist_line(self.ax_hist, data, edges, color=color, label=col)
             self.ax_hist.axvline(mean, color=color, linestyle="--", linewidth=1.5)
             self.ax_hist.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
             self.ax_hist.axvline(mn,   color=color, linestyle="--", linewidth=1.5)

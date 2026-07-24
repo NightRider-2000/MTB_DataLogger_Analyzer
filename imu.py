@@ -7,7 +7,7 @@ from matplotlib.lines import Line2D
 from PIL import Image, ImageTk
 
 import widgets as w
-from constants import BG, DARK, HIST_COLORS, WORLD_AXIS_COLOR, BOARD_AXIS_COLOR
+from constants import BG, DARK, HIST_COLORS, WORLD_AXIS_COLOR, BOARD_AXIS_COLOR, HIST_BINS_COMPACT
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _BIKE_IMG  = os.path.join(_DIR, "__UserFiles", "Bike_Picture.jpeg")
@@ -146,10 +146,13 @@ class ImuMixin:
         # wider than half the axes on the small canvas this diagram gets.
         ax.text(-0.08, 0.55, "Up (Z)",
                 color=WORLD_AXIS_COLOR, fontsize=10, ha="left", va="center", fontweight="bold")
-        # +Z_body note (out of the sagittal plane) — in its own band below all
-        # arrows/labels so nothing overlaps it. With the mirrored x-axis this is
-        # a view from the bike's LEFT side, so rider's right points INTO the page.
-        ax.text(0.0, -1.12, "Board Z → rider's right (into page)",
+        # Out-of-plane axes note (in its own band below all arrows/labels so
+        # nothing overlaps). The x-axis is mirrored (forward drawn left), so
+        # out-of-page = rider's LEFT, into-page = rider's RIGHT. In ISO 8855 the
+        # lateral axis is +Y (left); board +Z points the opposite way (right).
+        ax.text(0.0, -1.06, "ISO 8855:  +Y → rider's left (out of page)",
+                color=WORLD_AXIS_COLOR, fontsize=9, ha="center", va="center")
+        ax.text(0.0, -1.22, "Board +Z → rider's right (into page)",
                 color=BOARD_AXIS_COLOR, fontsize=9, ha="center", va="center")
 
         # Arc between straight-down (−90°) and Board Y (θ forward of down)
@@ -193,7 +196,7 @@ class ImuMixin:
         ax.set_xlim(lim, -lim)   # inverted so forward (positive x) points left
         ax.set_ylim(-1.3, lim)
         ax.set_aspect("equal")
-        ax.set_title("IMU Axis Orientation", color=DARK, fontsize=12)
+        ax.set_title("IMU Axis Orientation — ISO 8855", color=DARK, fontsize=12)
         ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
         for spine in ax.spines.values():
             spine.set_visible(False)
@@ -240,15 +243,22 @@ class ImuMixin:
             ax.set_facecolor(BG)
 
             plotted = False
+            # Gather the group's valid signals, then bin them all on shared edges
+            # (rule: 2+ histograms on one Axes share bins).
+            group = []
             for j, (col, sig_label) in enumerate(signals):
                 if col not in self.cal_result_df.columns:
                     continue
                 data = self.cal_result_df[col].dropna()
                 if data.empty:
                     continue
+                group.append((j, sig_label, data))
+            edges = (w.shared_bin_edges([d.values for _, _, d in group], HIST_BINS_COMPACT)
+                     if group else HIST_BINS_COMPACT)
+            for j, sig_label, data in group:
                 color = HIST_COLORS[j % len(HIST_COLORS)]
-                ax.hist(data, bins=120, alpha=0.45, color=color,
-                        label=f"{sig_label} (Avg: {data.mean():.2f})")
+                w.plot_hist_line(ax, data, edges, color=color,
+                                 label=f"{sig_label} (Avg: {data.mean():.2f})")
                 ax.axvline(data.mean(), color=color, linewidth=1.2, linestyle="--")
                 plotted = True
 

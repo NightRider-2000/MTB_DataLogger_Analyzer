@@ -2,7 +2,7 @@ import tkinter as tk
 import warnings
 
 import widgets as w
-from constants import BG, DARK, GRID, HIST_BAR_COLOR
+from constants import BG, DARK, GRID, HIST_BAR_COLOR, HIST_BINS
 
 
 class SagMixin:
@@ -12,7 +12,10 @@ class SagMixin:
         frame.pack(fill=tk.BOTH, expand=True)
 
         self.fig_sag = w.make_figure(figsize=(14, 6), dpi=100)
-        self.axes_sag = self.fig_sag.subplots(2, 4)
+        # 2×3: the mm-displacement column was removed (not useful — the % and
+        # wheel-position columns carry the sag story). Cols: Pos%, Wheel Pos%,
+        # Wheel Pos% (≥98th pctile zoom).
+        self.axes_sag = self.fig_sag.subplots(2, 3)
 
         for ax in self.axes_sag.flat:
             ax.set_facecolor(BG)
@@ -38,16 +41,14 @@ class SagMixin:
             ax.set_facecolor(BG)
 
         # Row 0 — Front Suspension
-        _sag_plot(self.axes_sag[0][0], self.cal_result_df, "Fork_Pos_mm")
-        _sag_plot(self.axes_sag[0][1], self.cal_result_df, "Fork_Pos_Perc")
-        _sag_plot(self.axes_sag[0][2], self.cal_result_df, "Front_Wheel_Pos_Perc")
-        _sag_plot(self.axes_sag[0][3], self.cal_result_df, "Front_Wheel_Pos_Perc", zoom_p90=True)
+        _sag_plot(self.axes_sag[0][0], self.cal_result_df, "Fork_Pos_Perc")
+        _sag_plot(self.axes_sag[0][1], self.cal_result_df, "Front_Wheel_Pos_Perc")
+        _sag_plot(self.axes_sag[0][2], self.cal_result_df, "Front_Wheel_Pos_Perc", zoom_p90=True)
 
         # Row 1 — Rear Suspension
-        _sag_plot(self.axes_sag[1][0], self.cal_result_df, "Shock_Pos_mm")
-        _sag_plot(self.axes_sag[1][1], self.cal_result_df, "Shock_Pos_Perc")
-        _sag_plot(self.axes_sag[1][2], self.cal_result_df, "Rear_Wheel_Pos_Perc")
-        _sag_plot(self.axes_sag[1][3], self.cal_result_df, "Rear_Wheel_Pos_Perc", zoom_p90=True)
+        _sag_plot(self.axes_sag[1][0], self.cal_result_df, "Shock_Pos_Perc")
+        _sag_plot(self.axes_sag[1][1], self.cal_result_df, "Rear_Wheel_Pos_Perc")
+        _sag_plot(self.axes_sag[1][2], self.cal_result_df, "Rear_Wheel_Pos_Perc", zoom_p90=True)
 
         for ax in self.axes_sag.flat:
             w.style_ax(ax)
@@ -69,7 +70,7 @@ def _sag_plot(ax, df, col, zoom_p90=False):
     import numpy as np
     color = HIST_BAR_COLOR
     mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
-    counts, bin_edges, _ = ax.hist(data, bins=200, alpha=0.45, color=color)
+    counts, bin_edges = w.plot_hist_line(ax, data, HIST_BINS, color=color)
     ax.axvline(mean, color=color, linestyle="--", linewidth=1.5)
     ax.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
     ax.axvline(mn,   color=color, linestyle="--", linewidth=1.5)

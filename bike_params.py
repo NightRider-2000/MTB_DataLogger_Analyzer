@@ -9,7 +9,7 @@ from PIL import Image, ImageTk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 import widgets as w
-from constants import BG, DARK, FIELD, ROW_ALT, GRID
+from constants import BG, DARK, FIELD, ROW_ALT, GRID, TABLE_GRID, BTN_FG
 
 
 _BIKE_IMG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -37,80 +37,175 @@ class BikeParamsMixin:
     def _build_bike_params_tab(self):
         outer = tk.Frame(self.bike_params_tab, bg=BG)
         outer.pack(fill=tk.BOTH, expand=True)
-        outer.columnconfigure(0, weight=1)
-        outer.columnconfigure(1, weight=0)
-        outer.columnconfigure(2, weight=1)
+        for c in (0, 1, 2):
+            outer.columnconfigure(c, weight=1, uniform="bp")
         outer.rowconfigure(0, weight=1)
-        outer.rowconfigure(1, weight=0)
-
-        # ── Left: rear parameters + motion ratio table ────────────────────────
-        left = tk.Frame(outer, bg=BG)
-        left.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        left.columnconfigure(0, weight=1)
-
-        # Rear parameter grid
-        pgrid = tk.Frame(left, bg=BG)
-        pgrid.grid(row=0, column=0, pady=(10, 6))
-        pgrid.columnconfigure(0, weight=1)
-        pgrid.columnconfigure(1, weight=0)
-        pgrid.columnconfigure(2, weight=0)
 
         _EW = 7   # uniform entry width
+        _LBL_FONT = ("", 11, "bold")   # row-label font (small enough to not clip)
+        # Shared column geometry for the two LEFT cards so their boxes line up.
+        _COL0_MIN, _COL_ENT = 180, 68   # label col ≥ longest label; entry cols
 
-        def _pgrid_row(parent, row, label, default, unit, var_attr, entry_attr, callback=None):
-            tk.Label(parent, text=label, bg=BG, fg=DARK,
-                     font=("", 15, "bold"), anchor="e").grid(
-                row=row, column=0, sticky="e", padx=(0, 6), pady=3)
-            e = w.make_entry(parent, width=_EW)
-            e.insert(0, default)
-            e.grid(row=row, column=1, pady=3)
-            tk.Label(parent, text=unit, bg=BG, fg=DARK,
-                     anchor="w").grid(row=row, column=2, sticky="w", padx=(4, 0), pady=3)
+        # ── Card / table builders ────────────────────────────────────────────
+        def _card(parent, title, **pack_kw):
+            """A titled, bordered section that reads like a table.
+
+            The 1-px TABLE_GRID outline is a colored outer frame with the
+            content in an inner frame (reliable on macOS, where a Frame's
+            ``highlightthickness`` border can silently fail to paint depending
+            on anchor/position). ``pack_kw`` positions the whole card.
+            """
+            border = tk.Frame(parent, bg=TABLE_GRID)
+            border.pack(**pack_kw)
+            card = tk.Frame(border, bg=BG)
+            card.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+            tk.Label(card, text=title, bg=DARK, fg=BTN_FG, font=("", 14, "bold"),
+                     pady=3).grid(row=0, column=0, columnspan=4, sticky="ew")
+            card.grid_columnconfigure(0, weight=1)
+            return card
+
+        def _reg(var_attr, default, entry=None, entry_attr=None):
             setattr(self, var_attr, tk.StringVar(value=default))
-            setattr(self, entry_attr, e)
-            def _cb(ev, _e=e, _va=var_attr, _cb2=callback):
+            if entry_attr and entry is not None:
+                setattr(self, entry_attr, entry)
+
+        def _bind(entry, var_attr, cb):
+            def _c(ev, _e=entry, _va=var_attr, _cb=cb):
                 getattr(self, _va).set(_e.get())
-                if _cb2:
-                    _cb2()
-            e.bind("<KeyRelease>", _cb)
+                if _cb:
+                    _cb()
+            entry.bind("<KeyRelease>", _c)
+
+        def _fr_header(card):
+            tk.Label(card, text="Front", bg=BG, fg=DARK, font=("", 12, "bold")).grid(
+                row=1, column=1, pady=(3, 0))
+            tk.Label(card, text="Rear", bg=BG, fg=DARK, font=("", 12, "bold")).grid(
+                row=1, column=2, pady=(3, 0))
+
+        def _fr_row(card, row, label, unit, f_def, f_var, r_def, r_var,
+                    f_cb=None, r_cb=None, f_ea=None, r_ea=None):
+            tk.Label(card, text=label, bg=BG, fg=DARK, font=_LBL_FONT,
+                     anchor="e").grid(row=row, column=0, sticky="e", padx=(8, 6), pady=2)
+            ef = w.make_entry(card, width=_EW); ef.insert(0, f_def)
+            ef.grid(row=row, column=1, padx=3, pady=2)
+            er = w.make_entry(card, width=_EW); er.insert(0, r_def)
+            er.grid(row=row, column=2, padx=3, pady=2)
+            tk.Label(card, text=unit, bg=BG, fg=DARK, anchor="w").grid(
+                row=row, column=3, sticky="w", padx=(4, 8), pady=2)
+            _reg(f_var, f_def, ef, f_ea); _reg(r_var, r_def, er, r_ea)
+            _bind(ef, f_var, f_cb); _bind(er, r_var, r_cb)
+            return ef, er
+
+        def _kv_row(card, row, label, default, unit, var_attr, cb=None,
+                    entry_attr=None, entry_col=1, unit_col=3):
+            tk.Label(card, text=label, bg=BG, fg=DARK, font=_LBL_FONT,
+                     anchor="e").grid(row=row, column=0, sticky="e", padx=(8, 6), pady=2)
+            e = w.make_entry(card, width=_EW); e.insert(0, default)
+            e.grid(row=row, column=entry_col, pady=2)
+            tk.Label(card, text=unit, bg=BG, fg=DARK, anchor="w").grid(
+                row=row, column=unit_col, sticky="w", padx=(4, 8), pady=2)
+            _reg(var_attr, default, e, entry_attr)
+            _bind(e, var_attr, cb)
             return e
 
-        entry = _pgrid_row(pgrid, 0, "Rear Shock Max Travel",    "55",  "mm",
-                           "rear_travel_var",      "_rear_travel_entry",
-                           lambda: self._update_sag_plots())
-        entry_rst = _pgrid_row(pgrid, 1, "Rear Suspension Max Travel", "150", "mm",
-                               "rear_susp_travel_var", "_rear_susp_travel_entry")
-        entry_rwc = _pgrid_row(pgrid, 2, "Rear Wheel Circumference",   "91",  "in",
-                               "rear_wheel_circ_var",  "_rear_wheel_circ_entry")
-        entry_rsc = _pgrid_row(pgrid, 3, "Rear Wheel Triggers/Rev",    "12",  "",
-                               "rear_spoke_count_var", "_rear_spoke_count_entry")
+        # ── Linked-field callbacks (defined first; they read self.* entries
+        # that the cards create below, and only fire on user edits) ───────────
+        def _recalc(*_):
+            if getattr(self, "cal_result_df", None) is not None:
+                self._apply_all_calibrations()
 
-        # Motion ratio section
-        tk.Label(left, text="Rear Suspension Motion Ratio",
-                 bg=BG, fg=DARK, font=("", 15, "bold")).grid(row=1, column=0, sticky="s", pady=(6, 2))
+        def _upd_fst(*_):
+            # Front VERTICAL wheel travel = fork travel · sin(HTA). The trig factor
+            # also scales the numerator (Front_Wheel_Pos_mm), so it cancels in
+            # Front_Wheel_Pos_Perc — this MUST stay the vertical value or the front
+            # sag % reads low (maxes at ~sin(HTA)·100 instead of 100%).
+            try:
+                self.head_tube_angle_var.set(self._head_tube_angle_entry.get())
+                fst = (float(self.front_travel_var.get())
+                       * math.sin(math.radians(float(self._head_tube_angle_entry.get()))))
+                self._front_susp_travel_entry.delete(0, tk.END)
+                self._front_susp_travel_entry.insert(0, f"{fst:.2f}")
+                self.front_susp_travel_var.set(f"{fst:.6g}")
+            except (ValueError, TypeError, AttributeError):
+                pass
+            _recalc()
 
-        btn_frame = tk.Frame(left, bg=BG)
-        btn_frame.grid(row=2, column=0, sticky="w", pady=(0, 4))
+        def _front_travel_cb():
+            self._update_sag_plots()
+            _upd_fst()
+
+        def _rear_travel_cb():
+            self._update_sag_plots()
+            self._recompute_rear_wheel_travel()
+
+        _default_fst = round(150 * math.sin(math.radians(65)), 2)
+
+        # ── LEFT column: Suspension + Bike Geometry ───────────────────────────
+        left = tk.Frame(outer, bg=BG)
+        left.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+
+        susp = _card(left, "Suspension", anchor="nw", padx=(4, 8))
+        _fr_header(susp)
+        _fr_row(susp, 2, "Spring Rate", "N/mm",
+                "11.38", "front_spring_rate_var", "105.08", "rear_spring_rate_var")
+        _fr_row(susp, 3, "Preload", "mm",
+                "0.0", "front_preload_var", "1.93", "rear_preload_var")
+        _fr_row(susp, 4, "Fork / Shock Travel", "mm",
+                "150", "front_travel_var", "55", "rear_travel_var",
+                f_cb=_front_travel_cb, r_cb=_rear_travel_cb,
+                f_ea="_front_travel_entry", r_ea="_rear_travel_entry")
+        # Rear value is a placeholder — _recompute_rear_wheel_travel() overwrites it
+        # at build end (and on shock-stroke / MR-table edits) from the MR lookup.
+        _fr_row(susp, 5, "Vertical Wheel Travel", "mm",
+                f"{_default_fst:.2f}", "front_susp_travel_var", "150", "rear_susp_travel_var",
+                f_cb=_recalc, r_cb=_recalc,
+                f_ea="_front_susp_travel_entry", r_ea="_rear_susp_travel_entry")
+
+        geo = _card(left, "Bike Geometry", anchor="nw", padx=(4, 8), pady=(12, 0))
+        _kv_row(geo, 1, "Head Tube Angle", "65", "deg", "head_tube_angle_var",
+                cb=_upd_fst, entry_attr="_head_tube_angle_entry", entry_col=2)
+        _kv_row(geo, 2, "Wheel Base", "1242", "mm", "wheel_base_var",
+                entry_attr="_wheel_base_entry", entry_col=2)
+        _kv_row(geo, 3, "IMU Pitch Offset", "30", "deg", "pitch_offset_var",
+                cb=_recalc, entry_attr="_pitch_offset_entry", entry_col=2)
+
+        # Lock the two left cards to identical column widths so the Front/Rear
+        # boxes — and the geometry values placed under "Rear" — line up across
+        # both cards, and column 0 is always wide enough for the longest label.
+        for _c in (susp, geo):
+            _c.grid_columnconfigure(0, weight=0, minsize=_COL0_MIN)
+            _c.grid_columnconfigure(1, minsize=_COL_ENT)
+            _c.grid_columnconfigure(2, minsize=_COL_ENT)
+
+        # ── CENTRE column: bike image + Rear Suspension Motion Ratio ──────────
+        centre = tk.Frame(outer, bg=BG)
+        centre.grid(row=0, column=1, sticky="nsew", pady=10)
+        self._bike_params_img_label = tk.Label(centre, bg=BG)
+        self._bike_params_img_label.pack()
+        self.after(0, self._load_bike_params_image)
+
+        mr_card = _card(centre, "Rear Suspension Motion Ratio",
+                        anchor="n", fill=tk.BOTH, expand=True, pady=(10, 0))
+        mr_card.grid_rowconfigure(2, weight=1)
+
+        btn_frame = tk.Frame(mr_card, bg=BG)
+        btn_frame.grid(row=1, column=0, columnspan=4, pady=4)
         w.make_btn(btn_frame, "Load CSV", self._load_mr_csv).pack(side=tk.LEFT, padx=(0, 4))
         w.make_btn(btn_frame, "Save CSV", self._save_mr_csv).pack(side=tk.LEFT)
 
-        tree_frame = tk.Frame(left, bg=BG)
-        tree_frame.grid(row=3, column=0, sticky="nsew")
-        left.rowconfigure(3, weight=1)
-
+        tree_frame = tk.Frame(mr_card, bg=BG)
+        tree_frame.grid(row=2, column=0, columnspan=4, sticky="nsew", padx=6)
         mr_tree = ttk.Treeview(tree_frame, columns=("Shock_Travel", "Wheel_Vertical_Travel"),
-                               show="headings", height=15)
-        mr_tree.heading("Shock_Travel",          text="Shock_Travel")
-        mr_tree.heading("Wheel_Vertical_Travel",  text="Wheel_Vertical_Travel")
+                               show="headings", height=10)
+        mr_tree.heading("Shock_Travel",          text="Shock Travel")
+        mr_tree.heading("Wheel_Vertical_Travel",  text="Wheel Vert Travel")
         mr_tree.column("Shock_Travel",           width=100, anchor="center")
         mr_tree.column("Wheel_Vertical_Travel",  width=140, anchor="center")
         w.enable_gridlines(mr_tree)
         mr_tree.tag_configure("even", background=FIELD,   foreground=DARK)
         mr_tree.tag_configure("odd",  background=ROW_ALT, foreground=DARK)
-
         for i, (st, wt) in enumerate(zip(_DEFAULT_SHOCK, _DEFAULT_WHEEL)):
             mr_tree.insert("", tk.END, values=(st, wt), tags=("even" if i % 2 == 0 else "odd",))
-
         scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=mr_tree.yview)
         mr_tree.configure(yscrollcommand=scroll.set)
         mr_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -118,196 +213,53 @@ class BikeParamsMixin:
         self.mr_tree = mr_tree
         mr_tree.bind("<Double-1>", self._edit_mr_cell)
 
-        # ── Centre: bike image + chain ring input ─────────────────────────────
-        centre = tk.Frame(outer, bg=BG)
-        centre.grid(row=0, column=1, sticky="nsew", pady=10)
-        self._bike_params_img_label = tk.Label(centre, bg=BG)
-        self._bike_params_img_label.pack()
-        self.after(0, self._load_bike_params_image)
+        mr_plot = tk.Frame(mr_card, bg=BG)
+        mr_plot.grid(row=3, column=0, columnspan=4, pady=(4, 6))
+        self._fig_mr = w.make_figure(figsize=(4, 2.0), dpi=100)
+        self._ax_mr  = self._fig_mr.add_subplot(111)
+        self._canvas_mr = FigureCanvasTkAgg(self._fig_mr, master=mr_plot)
+        self._canvas_mr.get_tk_widget().pack(anchor="center")
 
-        ctr_grid = tk.Frame(centre, bg=BG)
-        ctr_grid.pack(pady=(8, 0))
-
-        tk.Label(ctr_grid, text="Crank Triggers/Rev", bg=BG, fg=DARK,
-                 font=("", 15, "bold"), anchor="e").grid(row=0, column=0, sticky="e", padx=(0, 6), pady=3)
-        self.chain_ring_spokes_var = tk.StringVar(value="10")
-        entry_crs = w.make_entry(ctr_grid, width=_EW)
-        entry_crs.insert(0, "10")
-        entry_crs.grid(row=0, column=1, pady=3)
-        def _on_crs_change(e):
-            self.chain_ring_spokes_var.set(entry_crs.get())
-        entry_crs.bind("<KeyRelease>", _on_crs_change)
-        self._chain_ring_spokes_entry = entry_crs
-
-        tk.Label(ctr_grid, text="Chain Ring Teeth", bg=BG, fg=DARK,
-                 font=("", 15, "bold"), anchor="e").grid(row=1, column=0, sticky="e", padx=(0, 6), pady=3)
-        self.chain_ring_teeth_var = tk.StringVar(value="30")
-        entry_crt = w.make_entry(ctr_grid, width=_EW)
-        entry_crt.insert(0, "30")
-        entry_crt.grid(row=1, column=1, pady=3)
-        tk.Label(ctr_grid, text="teeth", bg=BG, fg=DARK).grid(row=1, column=2, sticky="w", padx=(4, 0), pady=3)
-        def _on_crt_change(e):
-            self.chain_ring_teeth_var.set(entry_crt.get())
-        entry_crt.bind("<KeyRelease>", _on_crt_change)
-        self._chain_ring_teeth_entry = entry_crt
-
-        tk.Label(ctr_grid, text="IMU Pitch Offset", bg=BG, fg=DARK,
-                 font=("", 15, "bold"), anchor="e").grid(row=2, column=0, sticky="e", padx=(0, 6), pady=3)
-        self.pitch_offset_var = tk.StringVar(value="30")
-        entry_po = w.make_entry(ctr_grid, width=_EW)
-        entry_po.insert(0, "30")
-        entry_po.grid(row=2, column=1, pady=3)
-        tk.Label(ctr_grid, text="deg", bg=BG, fg=DARK).grid(row=2, column=2, sticky="w", padx=(4, 0), pady=3)
-        def _on_po_change(e):
-            self.pitch_offset_var.set(entry_po.get())
-            if hasattr(self, "cal_result_df") and self.cal_result_df is not None:
-                self._apply_all_calibrations()
-        entry_po.bind("<KeyRelease>", _on_po_change)
-        self._pitch_offset_entry = entry_po
-
-        # ── Right: front parameters ───────────────────────────────────────────
+        # ── RIGHT column: Drivetrain & Wheels + Cassette Gears ────────────────
         right = tk.Frame(outer, bg=BG)
         right.grid(row=0, column=2, sticky="nsew", padx=10, pady=10)
-        right.columnconfigure(0, weight=1)
 
-        pgrid2 = tk.Frame(right, bg=BG)
-        pgrid2.pack(anchor="center", pady=(10, 0))
-        pgrid2.columnconfigure(0, weight=1)
-        pgrid2.columnconfigure(1, weight=0)
-        pgrid2.columnconfigure(2, weight=0)
+        dt = _card(right, "Drivetrain & Wheels", anchor="n")
+        _fr_header(dt)
+        _fr_row(dt, 2, "Wheel Circumference", "in",
+                "91", "front_wheel_circ_var", "91", "rear_wheel_circ_var",
+                f_ea="_front_wheel_circ_entry", r_ea="_rear_wheel_circ_entry")
+        _fr_row(dt, 3, "Wheel Triggers/Rev", "",
+                "12", "front_spoke_count_var", "12", "rear_spoke_count_var",
+                f_ea="_front_spoke_count_entry", r_ea="_rear_spoke_count_entry")
+        tk.Frame(dt, bg=TABLE_GRID, height=1).grid(row=4, column=0, columnspan=4,
+                                                   sticky="ew", padx=6, pady=(4, 2))
+        _kv_row(dt, 5, "Crank Triggers/Rev", "10", "", "chain_ring_spokes_var",
+                entry_attr="_chain_ring_spokes_entry", entry_col=1, unit_col=2)
+        _kv_row(dt, 6, "Chain Ring Teeth", "30", "teeth", "chain_ring_teeth_var",
+                entry_attr="_chain_ring_teeth_entry", entry_col=1, unit_col=2)
 
-        def _pgrid2_row(row, label, default, unit, var_attr, entry_attr, callback=None):
-            tk.Label(pgrid2, text=label, bg=BG, fg=DARK,
-                     font=("", 15, "bold"), anchor="e").grid(
-                row=row, column=0, sticky="e", padx=(0, 6), pady=3)
-            e = w.make_entry(pgrid2, width=_EW)
-            e.insert(0, default)
-            e.grid(row=row, column=1, pady=3)
-            tk.Label(pgrid2, text=unit, bg=BG, fg=DARK,
-                     anchor="w").grid(row=row, column=2, sticky="w", padx=(4, 0), pady=3)
-            setattr(self, var_attr, tk.StringVar(value=default))
-            setattr(self, entry_attr, e)
-            def _cb(ev, _e=e, _va=var_attr, _cb2=callback):
-                getattr(self, _va).set(_e.get())
-                if _cb2:
-                    _cb2()
-            e.bind("<KeyRelease>", _cb)
-            return e
-
-        self.front_travel_var = tk.StringVar(value="150")
-        entry2 = w.make_entry(pgrid2, width=_EW)
-        entry2.insert(0, "150")
-        tk.Label(pgrid2, text="Front Fork Max Travel", bg=BG, fg=DARK,
-                 font=("", 15, "bold"), anchor="e").grid(row=0, column=0, sticky="e", padx=(0, 6), pady=3)
-        entry2.grid(row=0, column=1, pady=3)
-        tk.Label(pgrid2, text="mm", bg=BG, fg=DARK, anchor="w").grid(
-            row=0, column=2, sticky="w", padx=(4, 0), pady=3)
-        self._front_travel_entry = entry2
-
-        self.head_tube_angle_var = tk.StringVar(value="65")
-        entry3 = w.make_entry(pgrid2, width=_EW)
-        entry3.insert(0, "65")
-        tk.Label(pgrid2, text="Head Tube Angle", bg=BG, fg=DARK,
-                 font=("", 15, "bold"), anchor="e").grid(row=1, column=0, sticky="e", padx=(0, 6), pady=3)
-        entry3.grid(row=1, column=1, pady=3)
-        tk.Label(pgrid2, text="deg", bg=BG, fg=DARK, anchor="w").grid(
-            row=1, column=2, sticky="w", padx=(4, 0), pady=3)
-        self._head_tube_angle_entry = entry3
-
-        _default_fst = round(150 * math.sin(math.radians(65)), 2)
-        self.front_susp_travel_var = tk.StringVar(value=str(_default_fst))
-        entry_fst = w.make_entry(pgrid2, width=_EW)
-        entry_fst.insert(0, f"{_default_fst:.2f}")
-        tk.Label(pgrid2, text="Front Suspension Max Travel", bg=BG, fg=DARK,
-                 font=("", 15, "bold"), anchor="e").grid(row=2, column=0, sticky="e", padx=(0, 6), pady=3)
-        entry_fst.grid(row=2, column=1, pady=3)
-        tk.Label(pgrid2, text="mm", bg=BG, fg=DARK, anchor="w").grid(
-            row=2, column=2, sticky="w", padx=(4, 0), pady=3)
-        self._front_susp_travel_entry = entry_fst
-
-        entry_fwc = _pgrid2_row(3, "Front Wheel Circumference", "91", "in",
-                                "front_wheel_circ_var", "_front_wheel_circ_entry")
-        entry_fsc = _pgrid2_row(4, "Front Wheel Triggers/Rev",  "12", "",
-                                "front_spoke_count_var", "_front_spoke_count_entry")
-
-        # Callbacks for computed/linked fields
-        def _update_front_susp_travel(*_):
-            self.head_tube_angle_var.set(entry3.get())
-            try:
-                fst = float(self.front_travel_var.get()) * math.sin(math.radians(float(entry3.get())))
-                entry_fst.delete(0, tk.END)
-                entry_fst.insert(0, f"{fst:.2f}")
-                self.front_susp_travel_var.set(f"{fst:.6g}")
-            except (ValueError, TypeError):
-                pass
-            if hasattr(self, "cal_result_df") and self.cal_result_df is not None:
-                self._apply_all_calibrations()
-
-        def _on_front_change(e):
-            self.front_travel_var.set(entry2.get())
-            self._update_sag_plots()
-
-        def _on_fst_change(e):
-            self.front_susp_travel_var.set(entry_fst.get())
-            if hasattr(self, "cal_result_df") and self.cal_result_df is not None:
-                self._apply_all_calibrations()
-
-        entry2.bind("<KeyRelease>", lambda e: (_on_front_change(e), _update_front_susp_travel()))
-        entry3.bind("<KeyRelease>", _update_front_susp_travel)
-        entry_fst.bind("<KeyRelease>", _on_fst_change)
-
-        # ── Bottom centre: cassette table ─────────────────────────────────────
-        cass_bot = tk.Frame(outer, bg=BG)
-        cass_bot.grid(row=1, column=1, sticky="n", pady=(0, 10))
-        tk.Label(cass_bot, text="Cassette", bg=BG, fg=DARK,
-                 font=("", 15, "bold")).pack(pady=(4, 2))
-        cassette_frame = tk.Frame(cass_bot, bg=BG)
-        cassette_frame.pack(anchor="center")
+        cass_card = _card(right, "Cassette Gears", anchor="n", pady=(12, 0))
+        cassette_frame = tk.Frame(cass_card, bg=BG)
+        cassette_frame.grid(row=1, column=0, columnspan=4, padx=6, pady=(4, 6))
         cassette_tree = ttk.Treeview(cassette_frame, columns=("Gear", "Teeth"),
-                                     show="headings", height=5)
+                                     show="headings", height=12)
         cassette_tree.heading("Gear",  text="Gear")
         cassette_tree.heading("Teeth", text="Teeth")
-        cassette_tree.column("Gear",  width=60, anchor="center")
-        cassette_tree.column("Teeth", width=60, anchor="center")
+        cassette_tree.column("Gear",  width=70, anchor="center")
+        cassette_tree.column("Teeth", width=70, anchor="center")
         w.enable_gridlines(cassette_tree)
         cassette_tree.tag_configure("even", background=FIELD,   foreground=DARK)
         cassette_tree.tag_configure("odd",  background=ROW_ALT, foreground=DARK)
         for i, (gear, teeth) in enumerate(_DEFAULT_CASSETTE):
             cassette_tree.insert("", tk.END, values=(gear, teeth),
                                  tags=("even" if i % 2 == 0 else "odd",))
-        cassette_scroll = ttk.Scrollbar(cassette_frame, orient="vertical",
-                                        command=cassette_tree.yview)
-        cassette_tree.configure(yscrollcommand=cassette_scroll.set)
         cassette_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        cassette_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.cassette_tree = cassette_tree
         cassette_tree.bind("<Double-1>", self._edit_cassette_cell)
 
-        # Wheel Base field below cassette table
-        wb_frame = tk.Frame(cass_bot, bg=BG)
-        wb_frame.pack(pady=(6, 0))
-        tk.Label(wb_frame, text="Wheel Base", bg=BG, fg=DARK,
-                 font=("", 15, "bold"), anchor="e").grid(row=0, column=0, sticky="e", padx=(0, 6), pady=3)
-        self.wheel_base_var = tk.StringVar(value="1242")
-        entry_wb = w.make_entry(wb_frame, width=_EW)
-        entry_wb.insert(0, "1242")
-        entry_wb.grid(row=0, column=1, pady=3)
-        tk.Label(wb_frame, text="mm", bg=BG, fg=DARK,
-                 anchor="w").grid(row=0, column=2, sticky="w", padx=(4, 0), pady=3)
-        def _on_wb_change(e):
-            self.wheel_base_var.set(entry_wb.get())
-        entry_wb.bind("<KeyRelease>", _on_wb_change)
-        self._wheel_base_entry = entry_wb
-
-        # ── Bottom left: motion ratio plot ────────────────────────────────────
-        bot = tk.Frame(outer, bg=BG)
-        bot.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
-
-        self._fig_mr = w.make_figure(figsize=(4, 2.2), dpi=100)
-        self._ax_mr  = self._fig_mr.add_subplot(111)
-        self._canvas_mr = FigureCanvasTkAgg(self._fig_mr, master=bot)
-        self._canvas_mr.get_tk_widget().pack(anchor="center", pady=5)
         self._refresh_mr_plot()
+        self._recompute_rear_wheel_travel()
 
     def _load_bike_params_image(self):
         try:
@@ -319,6 +271,39 @@ class BikeParamsMixin:
                 text="[Bike_Picture.jpeg not found]", fg=DARK, width=40, height=10)
 
     # ── Motion ratio helpers ──────────────────────────────────────────────────
+
+    def _recompute_rear_wheel_travel(self, *_):
+        """Derive rear VERTICAL wheel travel from the MR lookup at max shock stroke.
+
+        Shock stroke (``rear_travel_var``) is a hard input from this page; the max
+        rear wheel travel is the MR table's wheel value interpolated at that stroke
+        — the very same LUT used per-sample for ``Rear_Wheel_Pos_mm``. The result is
+        written into the (editable) rear Vertical Wheel Travel field so the sag %
+        denominator matches the mapping, and calibrations refresh if a ride is open.
+        """
+        if not (hasattr(self, "mr_tree") and hasattr(self, "_rear_susp_travel_entry")):
+            return
+        import numpy as np
+        try:
+            shock_max = float(self.rear_travel_var.get())
+        except (ValueError, TypeError, AttributeError):
+            return
+        shock_lut, wheel_lut = [], []
+        for iid in self.mr_tree.get_children():
+            vals = self.mr_tree.item(iid, "values")
+            try:
+                shock_lut.append(float(vals[0]))
+                wheel_lut.append(float(vals[1]))
+            except (ValueError, IndexError):
+                pass
+        if len(shock_lut) < 2:
+            return
+        rst = float(np.interp(shock_max, shock_lut, wheel_lut))
+        self._rear_susp_travel_entry.delete(0, tk.END)
+        self._rear_susp_travel_entry.insert(0, f"{rst:.2f}")
+        self.rear_susp_travel_var.set(f"{rst:.6g}")
+        if getattr(self, "cal_result_df", None) is not None:
+            self._apply_all_calibrations()
 
     def _refresh_mr_plot(self):
         shock, wheel = [], []
@@ -332,10 +317,21 @@ class BikeParamsMixin:
         ax = self._ax_mr
         ax.clear()
         ax.set_facecolor(BG)
-        ax.plot(shock, wheel, color=DARK, linewidth=2)
-        ax.set_title("Rear Suspension Motion Ratio", color=DARK, fontsize=13)
-        ax.set_xlabel("Shock Travel (mm)",           color=DARK, fontsize=12)
-        ax.set_ylabel("Wheel Vertical Travel (mm)",  color=DARK, fontsize=12)
+        import numpy as np
+        if len(shock) >= 2:
+            _s = np.asarray(shock, dtype=float)
+            _w = np.asarray(wheel, dtype=float)
+            _order = np.argsort(_s)
+            _s, _w = _s[_order], _w[_order]
+            # Leverage ratio = wheel travel per unit shock stroke = dWheel/dShock,
+            # plotted against vertical wheel travel (the universal MTB convention).
+            with np.errstate(divide="ignore", invalid="ignore"):
+                _lr = np.gradient(_w, _s)
+            _lr = np.where(np.isfinite(_lr), _lr, np.nan)
+            ax.plot(_w, _lr, color=DARK, linewidth=2, marker="o", markersize=3)
+        ax.set_title("Leverage Ratio", color=DARK, fontsize=12)
+        ax.set_xlabel("Rear Suspension Vertical Travel (mm)", color=DARK, fontsize=9)
+        ax.set_ylabel("Leverage Ratio",                       color=DARK, fontsize=9)
         ax.tick_params(colors=DARK, labelsize=7)
         for spine in ax.spines.values():
             spine.set_edgecolor(DARK)
@@ -372,6 +368,7 @@ class BikeParamsMixin:
             tree.item(row_id, values=tuple(values))
             entry.destroy()
             self._refresh_mr_plot()
+            self._recompute_rear_wheel_travel()
 
         def cancel(event=None):
             entry.destroy()
@@ -396,6 +393,7 @@ class BikeParamsMixin:
                 tag = "even" if i % 2 == 0 else "odd"
                 self.mr_tree.insert("", tk.END, values=(st, wt), tags=(tag,))
         self._refresh_mr_plot()
+        self._recompute_rear_wheel_travel()
 
     def _save_mr_csv(self):
         path = filedialog.asksaveasfilename(

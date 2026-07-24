@@ -197,6 +197,48 @@ def format_time_axis(ax):
     ax.xaxis.set_major_formatter(FuncFormatter(_fmt))
 
 
+def plot_hist_line(ax, data, bins, color, label=None, linewidth=1.5):
+    """Draw a histogram as a LINE, not bars: bin the data with np.histogram, then
+    plot bin CENTERS vs counts as straight line segments (a frequency polygon —
+    no curve smoothing), closed to zero at both ends so it reads as a bounded
+    distribution. Call this everywhere instead of ax.hist() for a 1-D histogram.
+
+    ``bins`` may be an int or an array of edges (passed straight to np.histogram,
+    so callers can share edges across overlaid signals). Returns
+    ``(counts, bin_edges)`` — same leading tuple as ax.hist() — for callers that
+    need them (e.g. percentile-zoom y-scaling)."""
+    import numpy as np
+    vals = np.asarray(data, dtype=float)
+    vals = vals[np.isfinite(vals)]
+    edges = np.histogram_bin_edges(vals if vals.size else [0.0, 1.0], bins=bins)
+    if vals.size == 0:
+        return np.array([]), edges
+    counts, edges = np.histogram(vals, bins=edges)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    # Close the polygon down to zero at the outer bin edges.
+    xs = np.concatenate(([edges[0]], centers, [edges[-1]]))
+    ys = np.concatenate(([0.0], counts.astype(float), [0.0]))
+    ax.plot(xs, ys, color=color, label=label, linewidth=linewidth)
+    return counts, edges
+
+
+def shared_bin_edges(datasets, bins):
+    """Common histogram bin edges spanning the combined finite range of several
+    datasets. **RULE — whenever 2+ histograms are drawn on the same Axes, bin
+    them on the SAME edges:** compute the edges once with this, then pass the
+    returned array to every ``plot_hist_line`` call on that Axes, so the overlaid
+    distributions are directly comparable bin-for-bin (independent per-signal
+    bins would misalign the lines and misrepresent overlap). ``bins`` is passed
+    to ``np.histogram_bin_edges`` (an int count, or a rule name)."""
+    import numpy as np
+    arrs = [np.asarray(d, dtype=float).ravel() for d in datasets]
+    allv = np.concatenate(arrs) if arrs else np.array([0.0, 1.0])
+    allv = allv[np.isfinite(allv)]
+    if allv.size == 0:
+        allv = np.array([0.0, 1.0])
+    return np.histogram_bin_edges(allv, bins=bins)
+
+
 def style_ax(ax):
     ax.tick_params(colors=DARK)
     ax.xaxis.label.set_color(DARK)

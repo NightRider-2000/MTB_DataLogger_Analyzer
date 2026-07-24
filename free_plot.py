@@ -7,6 +7,10 @@ import numpy as np
 import widgets as w
 from constants import BG, DARK, GRID, TREND_COLOR, BIN_MEAN_COLOR
 
+# Synthetic signal: elapsed ride time in seconds — selectable on ANY axis
+# (x, y, or color), same convention as the GPS tab's "Time (s)" color option.
+_TIME_KEY = "Time (s)"
+
 
 class FreePlotMixin:
 
@@ -53,7 +57,7 @@ class FreePlotMixin:
             return
         if self.cal_result_df is None:
             return
-        cols = [""] + list(self.cal_result_df.columns)
+        cols = ["", _TIME_KEY] + list(self.cal_result_df.columns)
         for attr in ("fp_x_combo", "fp_y_combo", "fp_c_combo"):
             cb = getattr(self, attr)
             current = cb.get()
@@ -62,6 +66,15 @@ class FreePlotMixin:
                 cb.set(current)
             else:
                 cb.set("")
+
+    def _fp_series(self, col):
+        """Resolve a selector value to a Series on cal_result_df's index — a real
+        column, or the synthetic elapsed-seconds ``Time (s)`` signal."""
+        if col == _TIME_KEY:
+            import pandas as pd
+            idx = self.cal_result_df.index
+            return pd.Series((idx - idx[0]).total_seconds(), index=idx)
+        return self.cal_result_df[col] if col in self.cal_result_df.columns else None
 
     def _update_free_plot(self, event=None):
         if self.cal_result_df is None:
@@ -74,17 +87,19 @@ class FreePlotMixin:
         self.ax_fp = self.fig_fp.add_subplot(111)
         self.ax_fp.set_facecolor(BG)
 
-        if not x_col or not y_col:
+        x = self._fp_series(x_col) if x_col else None
+        y = self._fp_series(y_col) if y_col else None
+        if x is None or y is None:
             w.style_ax(self.ax_fp)
             self.canvas_fp.draw()
             return
-
-        x = self.cal_result_df[x_col].dropna()
-        y = self.cal_result_df[y_col].dropna()
+        x = x.dropna()
+        y = y.dropna()
         idx = x.index.intersection(y.index)
 
-        if c_col and c_col in self.cal_result_df.columns:
-            c_series = self.cal_result_df[c_col].dropna()
+        c_series = self._fp_series(c_col) if c_col else None
+        if c_series is not None:
+            c_series = c_series.dropna()
             idx = idx.intersection(c_series.index)
             xv = x[idx].values.astype(float)
             yv = y[idx].values.astype(float)

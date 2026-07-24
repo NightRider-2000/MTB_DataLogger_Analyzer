@@ -20,7 +20,7 @@ matplotlib.rcParams["legend.loc"] = "upper right"
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-from constants import BG, DARK, GRID, CAL_FIELDS
+from constants import BG, DARK, GRID, FIELD, CAL_FIELDS
 from theme import setup_theme
 import widgets as w
 from file_manager import FileManagerMixin
@@ -63,6 +63,16 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
         self._source_dir        = os.path.expanduser("~/Documents/MTB_DAQ")
         self._download_paths    = []
         self._entries           = []
+        self._time_filter       = None  # (tmin, tmax) from the GPS tab, or None
+        self._stopped_mask      = None  # bool array (True=stopped) for the current ride
+        self._walking_mask      = None  # bool array (True=walking) for the current ride
+        # Auto-filters — both on by default (see calibration.py).
+        self.auto_filter_stopped_var = tk.BooleanVar(value=True)
+        self.auto_filter_walking_var = tk.BooleanVar(value=True)
+        # Live "N s (P%)" result readouts shown next to each filter checkbox
+        # (total flagged time + % of the whole recording; set by _update_filter_stats).
+        self._stopped_stats_var = tk.StringVar(value="")
+        self._walking_stats_var = tk.StringVar(value="")
 
         setup_theme(self)
         self._build_ui()
@@ -186,6 +196,25 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
         self.file_listbox.bind("<Double-Button-1>", self.on_file_double_click)
         self._populate_file_list()
 
+        # Auto-filters — below the file list, both on by default. Each row is a
+        # checkbox + a live "N s (P%)" result readout (total flagged time and % of
+        # the whole recording — see calibration._update_filter_stats). Toggling
+        # either re-slices the cached full frame (no reload); see
+        # calibration._on_toggle_auto_filter / _recompute_filtered_view.
+        for r, (text, fvar, svar) in enumerate((
+                ("Auto-Filter Stopped Times", self.auto_filter_stopped_var, self._stopped_stats_var),
+                ("Auto-Filter Walking",       self.auto_filter_walking_var, self._walking_stats_var)),
+                start=3):
+            frow = tk.Frame(file_sec, bg=BG)
+            frow.grid(row=r, column=0, sticky="ew", padx=5,
+                      pady=(0, 4) if r == 4 else (0, 0))
+            tk.Checkbutton(
+                frow, text=text, variable=fvar, command=self._on_toggle_auto_filter,
+                bg=BG, fg=DARK, activebackground=BG, activeforeground=DARK,
+                selectcolor=FIELD, highlightthickness=0, anchor="w",
+            ).pack(side=tk.LEFT)
+            tk.Label(frow, textvariable=svar, bg=BG, fg=DARK).pack(side=tk.LEFT, padx=(8, 0))
+
         # Signal selector (bottom half)
         sig_sec = tk.Frame(left, bg=BG)
         sig_sec.grid(row=1, column=0, sticky="nsew")
@@ -231,14 +260,12 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
         # Action bar — the ONLY way form edits take effect. Nothing below
         # recomputes or redraws automatically on keystroke; edits sit in the
         # form until this button is pressed.
+        # Suspension zero-min bias is AUTOMATIC on load (calibration.py) — the old
+        # manual Auto-Cal Fork/Shock buttons were removed.
         action_bar = tk.Frame(frame, bg=BG)
         action_bar.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
         w.make_btn(action_bar, "Apply Updates",
                    self.apply_calibration_updates).pack(side=tk.LEFT, padx=(0, 12))
-        w.make_btn(action_bar, "Auto-Cal Fork (Zero Min)",
-                   self.auto_calibrate_fork).pack(side=tk.LEFT, padx=(0, 6))
-        w.make_btn(action_bar, "Auto-Cal Shock (Zero Min)",
-                   self.auto_calibrate_shock).pack(side=tk.LEFT, padx=(0, 6))
 
         # Form: signal combo + entry fields. Editing these does nothing on its
         # own — click "Apply Updates" above to commit and recompute.

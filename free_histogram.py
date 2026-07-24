@@ -3,7 +3,7 @@ import warnings
 from tkinter import ttk
 
 import widgets as w
-from constants import BG, DARK, GRID, HIST_COLORS
+from constants import BG, DARK, GRID, HIST_COLORS, HIST_BINS
 
 
 class FreeHistogramMixin:
@@ -115,16 +115,23 @@ class FreeHistogramMixin:
             # ── 1D overlay histogram mode ─────────────────────────────────────
             plotted = False
             stats_lines = []
-            for i, (var, color) in enumerate(zip(self.fh_sig_vars, HIST_COLORS)):
+            # Gather valid signals, then share bin edges across the overlaid
+            # histograms (rule: 2+ histograms on one Axes share bins).
+            pairs = []
+            for var, color in zip(self.fh_sig_vars, HIST_COLORS):
                 col = var.get()
                 if not col or col not in self.cal_result_df.columns:
                     continue
                 data = self.cal_result_df[col].dropna()
                 if data.empty:
                     continue
+                pairs.append((col, color, data))
+            edges = (w.shared_bin_edges([d.values.astype(float) for _, _, d in pairs], HIST_BINS)
+                     if pairs else HIST_BINS)
+            for col, color, data in pairs:
                 mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
-                self.ax_fh.hist(data.values.astype(float), bins=200,
-                                alpha=0.45, color=color, label=col)
+                w.plot_hist_line(self.ax_fh, data.values.astype(float), edges,
+                                 color=color, label=col)
                 self.ax_fh.axvline(mean, color=color, linestyle="--", linewidth=1.5)
                 self.ax_fh.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
                 self.ax_fh.axvline(mn,   color=color, linestyle="--", linewidth=1.5)

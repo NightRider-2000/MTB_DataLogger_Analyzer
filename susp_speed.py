@@ -2,12 +2,19 @@ import tkinter as tk
 import numpy as np
 
 import widgets as w
-from constants import (BG, DARK, GRID, HIST_COLORS,
-                       SCATTER_ORIG_COLOR, TREND_ORIG_COLOR)
+from constants import BG, DARK, GRID, HIST_COLORS, HIST_BINS, SUSP_LSHS_BAND_MMPS
+
+_LSHS_COLOR = HIST_COLORS[2]   # green – LS↔HS transition band shading
 
 _COMP_COLOR    = HIST_COLORS[1]   # blue   – compression
 _REBOUND_COLOR = HIST_COLORS[0]   # orange – rebound
-_SCATTER_COLOR = HIST_COLORS[2]   # green  – scatter dots
+
+# Position-vs-speed 2D histograms (right column): adaptive bin count targeting a
+# MEAN occupancy of at least this many samples per bin (nbins/axis ≈ sqrt(N/50),
+# clipped below) so the color field stays smooth instead of speckled.
+_MAP_MIN_PER_BIN = 50
+_MAP_BINS_MIN    = 20
+_MAP_BINS_MAX    = 100
 
 
 class SuspSpeedMixin:
@@ -17,13 +24,28 @@ class SuspSpeedMixin:
         outer.pack(fill=tk.BOTH, expand=True)
 
         fig = w.make_figure(figsize=(12, 7), dpi=100)
-        gs  = fig.add_gridspec(2, 2, width_ratios=[1, 1.2], hspace=0.4, wspace=0.35)
+        # Left column: comp/rebound speed histograms (x linked front↔rear).
+        # Right column: position-vs-speed 2D histograms (front top, rear bottom,
+        # x linked) — each row is a nested sub-gridspec [map | colorbar] with a
+        # tiny wspace so the colorbar hugs its map (the outer wspace only
+        # separates the left/right columns). FIXED colorbar axes — a
+        # fig.colorbar() per redraw would stack new axes each time.
+        gs  = fig.add_gridspec(2, 2, width_ratios=[1, 1.25],
+                               hspace=0.4, wspace=0.3)
+        sub_top = gs[0, 1].subgridspec(1, 2, width_ratios=[30, 1], wspace=0.04)
+        sub_bot = gs[1, 1].subgridspec(1, 2, width_ratios=[30, 1], wspace=0.04)
 
-        self._ax_hist_front  = fig.add_subplot(gs[0, 0])
-        self._ax_hist_rear   = fig.add_subplot(gs[1, 0])
-        self._ax_scatter_spd = fig.add_subplot(gs[:, 1])
+        self._ax_hist_front = fig.add_subplot(gs[0, 0])
+        self._ax_hist_rear  = fig.add_subplot(gs[1, 0], sharex=self._ax_hist_front)
+        self._ax_map_front  = fig.add_subplot(sub_top[0, 0])
+        # x (position %) LINKED between the two maps so front/rear frame the same
+        # travel range and any x change tracks both.
+        self._ax_map_rear   = fig.add_subplot(sub_bot[0, 0], sharex=self._ax_map_front)
+        self._cax_map_front = fig.add_subplot(sub_top[0, 1])
+        self._cax_map_rear  = fig.add_subplot(sub_bot[0, 1])
 
-        for ax in (self._ax_hist_front, self._ax_hist_rear, self._ax_scatter_spd):
+        for ax in (self._ax_hist_front, self._ax_hist_rear,
+                   self._ax_map_front, self._ax_map_rear):
             ax.set_facecolor(BG)
 
         canvas, cv_widget = w.make_canvas(fig, outer)
@@ -37,9 +59,12 @@ class SuspSpeedMixin:
         if self.cal_result_df is None:
             return
 
-        for ax in (self._ax_hist_front, self._ax_hist_rear, self._ax_scatter_spd):
+        for ax in (self._ax_hist_front, self._ax_hist_rear,
+                   self._ax_map_front, self._ax_map_rear):
             ax.clear()
             ax.set_facecolor(BG)
+        self._cax_map_front.clear()
+        self._cax_map_rear.clear()
 
         # Keep only rows at the nominal sample interval (within ±50% of the
         # data's own median period — never a hardcoded rate). Drops multi-file
@@ -57,13 +82,23 @@ class SuspSpeedMixin:
         if _rr_spd_col in df.columns:
             df = df[df[_rr_spd_col] > 4.5]
 
-        col_front = "Front_Vert_Wheel_Spd_mmps"
-        col_rear  = "Rear_Vert_Wheel_Spd_mmps"
+        # SHAFT speeds (derivative of the raw sensor/shaft position) — the
+        # quantity damper LS/HS circuits actually see, so the LS↔HS band needs
+        # no motion-ratio conversion.
+        col_front = "Fork_Shaft_Spd_mmps"
+        col_rear  = "Shock_Shaft_Spd_mmps"
 
         # ── Histograms ────────────────────────────────────────────────────────
+        # Shared robust speed range across BOTH ends (the axes are sharex'd) —
+        # 95th pct of |speed| (the 2D maps' speed axis stays at 99.5th).
+        _spd_maxes = [float(np.percentile(np.abs(df[c].dropna().values), 95.0))
+                      for c in (col_front, col_rear)
+                      if c in df.columns and df[c].notna().any()]
+        _spd_shared_max = max(_spd_maxes) if _spd_maxes else 1.0
+
         for ax_hist, col, label in [
-            (self._ax_hist_front, col_front, "Front Susp Speed (mm/s)"),
-            (self._ax_hist_rear,  col_rear,  "Rear Susp Speed (mm/s)"),
+            (self._ax_hist_front, col_front, "Fork Shaft Speed (mm/s)"),
+            (self._ax_hist_rear,  col_rear,  "Shock Shaft Speed (mm/s)"),
         ]:
             if col not in df.columns:
                 w.style_ax(ax_hist)
@@ -73,147 +108,105 @@ class SuspSpeedMixin:
             comp    = series[series < 0]
             rebound = series[series > 0]
 
-            comp_abs  = comp.abs() if not comp.empty else comp
-            maxvals   = [s.max() for s in (comp_abs, rebound) if not s.empty]
-            bin_max   = max(maxvals) if maxvals else 1.0
-            bin_edges = np.linspace(0, bin_max, 201)
+            comp_abs = comp.abs() if not comp.empty else comp
+            # Shared edges so the two overlaid distributions line up bin-for-bin,
+            # over the front↔rear SHARED robust range (linked axes).
+            bin_max   = _spd_shared_max
+            bin_edges = np.linspace(0, bin_max, HIST_BINS + 1)
 
             if not comp.empty:
-                ax_hist.hist(comp_abs, bins=bin_edges, alpha=0.45, color=_COMP_COLOR,
-                             label=f"Compression  n={len(comp)}  mean={comp_abs.mean():.1f}")
+                w.plot_hist_line(ax_hist, comp_abs, bin_edges, color=_COMP_COLOR,
+                                 label=(f"Compression  n={len(comp)}  "
+                                        f"mean={comp_abs.mean():.1f}  max={comp_abs.max():.0f}"))
                 ax_hist.axvline(comp_abs.mean(), color=_COMP_COLOR,
                                 linestyle="--", linewidth=1.2)
             if not rebound.empty:
-                ax_hist.hist(rebound, bins=bin_edges, alpha=0.45, color=_REBOUND_COLOR,
-                             label=f"Rebound  n={len(rebound)}  mean={rebound.mean():.1f}")
+                w.plot_hist_line(ax_hist, rebound, bin_edges, color=_REBOUND_COLOR,
+                                 label=(f"Rebound  n={len(rebound)}  "
+                                        f"mean={rebound.mean():.1f}  max={rebound.max():.0f}"))
                 ax_hist.axvline(rebound.mean(), color=_REBOUND_COLOR,
                                 linestyle="--", linewidth=1.2)
 
             ax_hist.axvline(0, color=DARK, linewidth=1.0, linestyle="-")
-            ax_hist.set_xlim(0, 1200)
+            # LS↔HS damping transition band (shaft speed — no conversion needed).
+            _b0, _b1 = SUSP_LSHS_BAND_MMPS
+            ax_hist.axvspan(_b0, _b1, color=_LSHS_COLOR, alpha=0.12,
+                            label=f"LS↔HS transition {_b0:.0f}–{_b1:.0f} mm/s")
+            ax_hist.set_xlim(0, bin_max)
             handles, _ = ax_hist.get_legend_handles_labels()
             if handles:
                 ax_hist.legend(fontsize=10, facecolor=BG, edgecolor=DARK, labelcolor=DARK)
-            ax_hist.set_title(label, color=DARK, fontsize=13)
+            ax_hist.set_title(f"{label}  (sample based)", color=DARK, fontsize=13)
             ax_hist.set_xlabel("mm/s", color=DARK, fontsize=12)
             ax_hist.set_ylabel("Count", color=DARK, fontsize=12)
             w.style_ax(ax_hist)
 
-        # ── Scatter: original + time-aligned rear speed vs front speed ──────────
-        ax = self._ax_scatter_spd
-        x_orig = np.array([])
-        y_orig = np.array([])
-        x_aln  = np.array([])
-        y_aln  = np.array([])
-        if (col_front in df.columns
-                and col_rear in df.columns):
-            front_series = df[col_front].dropna()
-            rear_series  = df[col_rear].dropna()
+        # ── Position-vs-speed 2D histograms (front top, rear bottom) ─────────
+        # Common x (position %) range across BOTH ends — the axes are sharex'd,
+        # so bin each map over the same span rather than its own.
+        _x_ranges = []
+        for _pc in ("Fork_Pos_Perc", "Shock_Pos_Perc"):
+            if _pc in df.columns:
+                _pv = df[_pc].dropna().values
+                if len(_pv):
+                    _x_ranges.append(np.percentile(_pv, [0.2, 99.8]))
+        _x_shared = ((min(r[0] for r in _x_ranges), max(r[1] for r in _x_ranges))
+                     if _x_ranges else None)
 
-            if len(front_series) > 1 and len(rear_series) > 1:
-                # Original (unaligned) pairs
-                pair   = df[[col_front, col_rear]].dropna()
-                x_orig = pair[col_front].values
-                y_orig = pair[col_rear].values
-
-                # Numeric timestamps (seconds) for interpolation
-                t_front = front_series.index.view(np.int64) / 1e9
-                t_rear  = rear_series.index.view(np.int64)  / 1e9
-                x_all   = front_series.values
-
-                # Dynamic lag: wheelbase_mm / rear_speed_mm_per_s
-                _wb_mm      = float(getattr(self, "wheel_base_var",
-                                            type("", (), {"get": lambda s: "1242"})()).get())
-                _MPH_TO_MMS = 1609.344 / 3600.0 * 1000.0   # mph → mm/s
-                _rr_spd_col = "Rear_Horz_Wheel_Spd_mph"
-                if _rr_spd_col in df.columns:
-                    rr_spd = df[_rr_spd_col].dropna()
-                    rr_t   = rr_spd.index.view(np.int64) / 1e9
-                    rr_mph = np.interp(t_front, rr_t, rr_spd.values)
-                    lag_s  = _wb_mm / (np.maximum(rr_mph, 3.0) * _MPH_TO_MMS)
-                else:
-                    lag_s = np.zeros(len(t_front))
-
-                # Look up rear susp speed at t_front + lag (same road feature)
-                t_target = t_front + lag_s
-                y_all    = np.interp(t_target, t_rear, rear_series.values)
-
-                # Drop samples where target time is outside the rear signal range
-                valid = (t_target >= t_rear[0]) & (t_target <= t_rear[-1])
-                x_aln = x_all[valid]
-                y_aln = y_all[valid]
-
-        def _plot_trend_and_bins(ax, x, y, scatter_color, trend_color, bin_color,
-                                 scatter_label, trend_label_prefix, bin_label_prefix):
-            ax.scatter(x, y, s=1, alpha=0.15, color=scatter_color, label=scatter_label)
-            slope = np.dot(x, y) / np.dot(x, x)
-            ax.plot([-lim, lim], [-lim * slope, lim * slope],
-                    color=trend_color, linewidth=1.5, linestyle="--",
-                    label=f"{trend_label_prefix}  slope={slope:.2f}")
-            if len(x) > 20:
-                bins = np.linspace(x.min(), x.max(), 21)
-                bin_centers, bin_means, bin_stds = [], [], []
-                for lo, hi in zip(bins[:-1], bins[1:]):
-                    mask = (x >= lo) & (x < hi)
-                    if mask.sum() > 0:
-                        bin_centers.append((lo + hi) / 2)
-                        bin_means.append(y[mask].mean())
-                        bin_stds.append(y[mask].std())
-                if bin_centers:
-                    bc = np.array(bin_centers)
-                    bm = np.array(bin_means)
-                    bs = np.array(bin_stds)
-                    ax.plot(bc, bm, color=bin_color, linewidth=2.0,
-                            marker="o", markersize=4, label=f"{bin_label_prefix} bin mean", zorder=6)
-                    ax.fill_between(bc, bm - bs, bm + bs,
-                                    alpha=0.20, color=bin_color, label=f"{bin_label_prefix} ±1σ")
-
-        lim = 2000
-        if len(x_orig) > 1 or len(x_aln) > 1:
-            ax.set_xlim(-lim, lim)
-            ax.set_ylim(-lim, lim)
-
-            # Zero lines
-            ax.axhline(0, color=DARK, linewidth=0.6, linestyle="--")
-            ax.axvline(0, color=DARK, linewidth=0.6, linestyle="--")
-
-            # 1:1 line
-            ax.plot([-lim, lim], [-lim, lim],
-                    color="black", linewidth=1.2, label="1:1")
-
-            if len(x_orig) > 1:
-                _plot_trend_and_bins(ax, x_orig, y_orig,
-                                     scatter_color=SCATTER_ORIG_COLOR,
-                                     trend_color=TREND_ORIG_COLOR,
-                                     bin_color=TREND_ORIG_COLOR,
-                                     scatter_label="Original",
-                                     trend_label_prefix="Orig trend",
-                                     bin_label_prefix="Orig")
-            if len(x_aln) > 1:
-                _plot_trend_and_bins(ax, x_aln, y_aln,
-                                     scatter_color=_SCATTER_COLOR,
-                                     trend_color=_REBOUND_COLOR,
-                                     bin_color=DARK,
-                                     scatter_label="Aligned",
-                                     trend_label_prefix="Aligned trend",
-                                     bin_label_prefix="Aligned")
-
-            # Quadrant labels
-            ax.text(0.76, 0.93, "Comp", transform=ax.transAxes,
-                    color=DARK, fontsize=13, ha="center", va="top",
-                    fontweight="bold")
-            ax.text(0.24, 0.07, "Rebound", transform=ax.transAxes,
-                    color=DARK, fontsize=13, ha="center", va="bottom",
-                    fontweight="bold")
-
-            # upper left: "Comp"/"Rebound" quadrant labels occupy the other two corners
-            ax.legend(fontsize=10, facecolor=BG, edgecolor=DARK, labelcolor=DARK,
-                     loc="upper left")
-
-        ax.set_title("Front vs Rear Suspension Speed", color=DARK, fontsize=13)
-        ax.set_xlabel("Front Speed (mm/s)", color=DARK, fontsize=12)
-        ax.set_ylabel("Rear Speed (mm/s)", color=DARK, fontsize=12)
-        w.style_ax(ax)
+        for ax, cax, pos_col, spd_col, label in [
+            (self._ax_map_front, self._cax_map_front,
+             "Fork_Pos_Perc", col_front, "Fork"),
+            (self._ax_map_rear, self._cax_map_rear,
+             "Shock_Pos_Perc", col_rear, "Shock"),
+        ]:
+            drawn = False
+            if pos_col in df.columns and spd_col in df.columns:
+                pair = df[[pos_col, spd_col]].dropna()
+                n = len(pair)
+                if n > _MAP_MIN_PER_BIN * 4:
+                    xv = pair[pos_col].values.astype(float)
+                    yv = pair[spd_col].values.astype(float)
+                    # Adaptive bin count: nbins/axis ≈ sqrt(N / target-per-bin),
+                    # so a typical bin holds ≥ _MAP_MIN_PER_BIN samples and the
+                    # color field transitions smoothly instead of speckling.
+                    nb = int(np.clip(np.sqrt(n / _MAP_MIN_PER_BIN),
+                                     _MAP_BINS_MIN, _MAP_BINS_MAX))
+                    # Robust ranges so a few outliers don't stretch the frame;
+                    # x uses the SHARED front+rear span (linked axes).
+                    x0, x1 = _x_shared
+                    y1 = np.percentile(np.abs(yv), 99.5)
+                    from matplotlib.colors import LogNorm
+                    _, _, _, im = ax.hist2d(
+                        xv, yv, bins=nb,
+                        range=[[x0, x1], [-y1, y1]],
+                        cmap="hot", cmin=1, norm=LogNorm())
+                    ax.axhline(0, color=DARK, linewidth=0.8, linestyle="--")
+                    # LS↔HS transition band, both directions (comp + rebound)
+                    _b0, _b1 = SUSP_LSHS_BAND_MMPS
+                    for lo, hi in ((_b0, _b1), (-_b1, -_b0)):
+                        ax.axhspan(lo, hi, color=_LSHS_COLOR, alpha=0.15)
+                    cb = self._fig_susp_spd.colorbar(im, cax=cax)
+                    cb.set_label("Count", color=DARK)
+                    cb.ax.tick_params(colors=DARK)
+                    for lbl in cb.ax.get_yticklabels():
+                        lbl.set_color(DARK)
+                    # Comp (negative speed) below the zero line, Rebound above
+                    ax.text(0.985, 0.03, "Comp", transform=ax.transAxes,
+                            color=DARK, fontsize=11, ha="right", va="bottom",
+                            fontweight="bold")
+                    ax.text(0.985, 0.97, "Rebound", transform=ax.transAxes,
+                            color=DARK, fontsize=11, ha="right", va="top",
+                            fontweight="bold")
+                    drawn = True
+            cax.set_visible(drawn)
+            if not drawn:
+                ax.text(0.5, 0.5, "No Data Available", transform=ax.transAxes,
+                        ha="center", va="center", color=DARK, fontsize=14)
+            ax.set_title(f"{label}: Shaft Speed vs Position", color=DARK, fontsize=13)
+            ax.set_xlabel(f"{label} Pos (%)", color=DARK, fontsize=12)
+            ax.set_ylabel("Shaft Speed (mm/s)", color=DARK, fontsize=12)
+            w.style_ax(ax)
+            ax.grid(False)   # gridlines on top of a dense colormap just add noise
 
         import warnings
         with warnings.catch_warnings():

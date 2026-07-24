@@ -497,22 +497,20 @@ class GpsMixin:
         self._clear_time_filter()
 
     # ── Global time filter (slices the cached full result for every tab) ──────
+    # Both this window filter and the import-tab "Auto-Filter Out Stopped Times"
+    # filter compose through calibration._recompute_filtered_view — set the
+    # _time_filter state here and let that helper rebuild the view.
     def _apply_time_filter(self, tmin, tmax):
-        base = self._gps_base()
-        if base is None:
+        if self._gps_base() is None:
             return
-        idx = base.index
-        self.cal_result_df = base[(idx >= tmin) & (idx <= tmax)]
         self._time_filter = (tmin, tmax)
-        self._refresh_all_analysis_tabs()
+        self._recompute_filtered_view()
 
     def _clear_time_filter(self):
-        base = self._gps_base()
-        if base is None:
+        if self._gps_base() is None:
             return
-        self.cal_result_df = base
         self._time_filter = None
-        self._refresh_all_analysis_tabs()
+        self._recompute_filtered_view()
 
     # ── Small utilities ──────────────────────────────────────────────────────
     @staticmethod

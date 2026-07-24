@@ -4,7 +4,21 @@ import warnings
 from tkinter import filedialog, messagebox
 
 import widgets as w
-from constants import BG, DARK, FIELD, ROW_ALT, CAL_FIELDS, HIST_BAR_COLOR, GRID
+from constants import (BG, DARK, FIELD, ROW_ALT, CAL_FIELDS, HIST_BAR_COLOR, GRID,
+                       HIST_BINS, STOPPED_WHEEL_MPH, STOPPED_CRANK_RPM, STOPPED_MIN_S,
+                       STOPPED_RESUME_S, WALK_MAX_MPH, WALK_SPEED_WIN_S,
+                       WALK_REAR_COMP_PERC, WALK_MIN_S,
+                       GEAR_MIN_CRANK_RPM, GEAR_SUSTAIN_S,
+                       FILT_PER_PASS_HZ, FILT_SIGNALS)
+
+# Optional local add-on module (git-ignored via *_ip.py). When present it adds a
+# set of derived channels; when absent (e.g. a fresh clone) those channels are
+# simply omitted (guarded at the call site) and the rest of the app is unaffected.
+try:
+    from model_ip import apply_model_IP
+    _HAS_MODEL_IP = True
+except ImportError:
+    _HAS_MODEL_IP = False
 
 
 class CalibrationMixin:
@@ -124,49 +138,10 @@ class CalibrationMixin:
     # point actually observed in the data, correcting small offset/mounting
     # error without touching the Raw/Value calibration points.
 
-    def _auto_calibrate_zero_min(self, raw_signal, label):
-        if self.df is None or raw_signal not in self.df.columns:
-            messagebox.showwarning("No Data", "Load ride data first.")
-            return
-        cal = next((c for c in self.saved_calibrations if c["Signal"] == raw_signal), None)
-        if cal is None:
-            messagebox.showwarning("No Calibration",
-                                   f"No calibration row found for {label} ({raw_signal}).")
-            return
-        try:
-            raw_min = float(cal["Raw_Sig_Min"])
-            raw_max = float(cal["Raw_Sig_Max"])
-            val_min = float(cal["Value_at_Min"])
-            val_max = float(cal["Value_at_Max"])
-        except (ValueError, TypeError):
-            messagebox.showerror("Invalid Calibration",
-                                 f"{label}: Raw/Value fields must be numeric.")
-            return
-        if raw_max == raw_min:
-            messagebox.showerror("Invalid Range", f"{label}: Raw min and max must differ.")
-            return
-
-        a = (val_max - val_min) / (raw_max - raw_min)
-        b = val_min - a * raw_min
-        unbiased = a * self.df[raw_signal] + b   # bias-free calibrated series
-        cal["Bias"] = round(float(unbiased.min()), 6)
-
-        if self.cal_signal_var.get() == raw_signal:
-            self.bias_entry.delete(0, tk.END)
-            self.bias_entry.insert(0, str(cal["Bias"]))
-
-        dialog = w.ProgressDialog(self, f"Auto-calibrating {label}…")
-        try:
-            self._apply_all_calibrations(progress_cb=dialog.step)
-        finally:
-            dialog.close()
-        self._update_cal_plots(autofill=False)
-
-    def auto_calibrate_fork(self):
-        self._auto_calibrate_zero_min("analog1_v", "Fork")
-
-    def auto_calibrate_shock(self):
-        self._auto_calibrate_zero_min("analog2_v", "Shock")
+    # Suspension zero-min calibration is now AUTOMATIC — folded into the
+    # raw→calibrated loop in _apply_all_calibrations (runs on every load / Apply),
+    # so a topout captured anywhere in the ride sets the 0 mm reference. The old
+    # manual Auto-Cal Fork/Shock buttons + _auto_calibrate_zero_min were removed.
 
     def _read_cal_fields(self):
         """Return (raw_min, raw_max, cal_min, cal_max) or raise ValueError."""
@@ -267,7 +242,7 @@ class CalibrationMixin:
         if data is not None and not data.empty:
             color = HIST_BAR_COLOR
             mean, med, std, mn, mx = data.mean(), data.median(), data.std(), data.min(), data.max()
-            self.ax_hist_cal.hist(data, bins=200, alpha=0.45, color=color)
+            w.plot_hist_line(self.ax_hist_cal, data, HIST_BINS, color=color)
             self.ax_hist_cal.axvline(mean, color=color, linestyle="--", linewidth=1.5)
             self.ax_hist_cal.axvline(med,  color=color, linestyle=":",  linewidth=1.5)
             self.ax_hist_cal.axvline(mn,   color=color, linestyle="--", linewidth=1.5)
@@ -565,6 +540,81 @@ class CalibrationMixin:
         out[finite] = vel[finite]
         return out
 
+    def _filt(self, series):
+        """Zero-phase (forward-backward) low-pass → the slow trend of a signal.
+
+        Runs the dt-aware one-pole (`_time_varying_lowpass`) forward, then again
+        over the reversed signal, then reverses back — the per-pass phase lag
+        cancels, so the result has zero phase (no lag vs the events). Two passes
+        square the magnitude response, so each pass is designed at
+        ``FILT_PER_PASS_HZ`` (~0.466 Hz) to land the effective -3 dB at ~0.3 Hz.
+        Per-sample dt keeps the cutoff honest under irregular timing and makes
+        the filter self-reset across multi-file gaps; NaN in the signal drops
+        both passes to the exact loop fallback. Takes an array/Series, returns a
+        float ndarray aligned to the calibration index."""
+        import numpy as np
+        two_pi_fc = 2.0 * np.pi * FILT_PER_PASS_HZ
+        dt = self.cal_result_df.index.to_series().diff().dt.total_seconds().values
+        period = w.sample_period_s(self.cal_result_df.index)
+        sig = np.asarray(series, dtype=float)
+        if sig.size == 0:
+            return sig
+        fwd = self._time_varying_lowpass(sig, dt, two_pi_fc, period)
+        # Reverse traversal: the gap "before" reversed-sample j is the original
+        # gap "after" sample n-1-j, so the dt array is reversed AND rolled by one
+        # (dt[0]=NaN → the reversed first sample, which uses the period fallback).
+        rev_dt = np.roll(dt[::-1], 1)
+        bwd = self._time_varying_lowpass(fwd[::-1], rev_dt, two_pi_fc, period)[::-1]
+        return bwd
+
+    def _apply_filt_channels(self):
+        """Auto-generate a ``Filt_<name>`` zero-phase trend twin for every
+        present column in ``FILT_SIGNALS`` (constants.py — user-selected
+        defaults). Each twin is the slow ride-height / attitude trend with the
+        normal bumps removed; dynamic sag, force balance, and grade/lean read
+        straight off these."""
+        for _name in FILT_SIGNALS:
+            if _name in self.cal_result_df.columns:
+                self.cal_result_df[f"Filt_{_name}"] = self._filt(
+                    self.cal_result_df[_name].values)
+
+    # Suspension voltage sensors are physically bounded by their calibration
+    # endpoints: a raw reading outside [Raw_Sig_Min, Raw_Sig_Max] is an
+    # out-of-range / sensor-fault sample (e.g. the fork topping out past its
+    # rated extended voltage — seen as impossible negative mm on real rides),
+    # not real travel. Its calibrated value is set to NaN, plus a guard band of
+    # this many seconds on each side, because a downstream filter whose window
+    # straddles the bad sample (Savitzky-Golay velocity, dynamic-sag low-pass)
+    # would otherwise smear the fault into good neighbours.
+    _VOLTAGE_MASK_BUFFER_S = 0.020
+
+    def _mask_voltage_out_of_range(self, series, raw, raw_min, raw_max):
+        """NaN every calibrated sample whose raw voltage fell outside the
+        sensor's rated [min,max] window, plus a ±``_VOLTAGE_MASK_BUFFER_S``
+        guard band. The buffer is expressed in samples derived from the data's
+        own rate (never hardcoded); the analog channel is dense, so the
+        sample-count buffer maps cleanly to the intended time window. All
+        indexing is positional so duplicate timestamps (multi-file concat)
+        can't trigger a pandas index-alignment blow-up."""
+        import numpy as np
+        import pandas as pd
+        lo, hi = (raw_min, raw_max) if raw_min <= raw_max else (raw_max, raw_min)
+        bad = ((raw < lo) | (raw > hi)).to_numpy()
+        if not bad.any():
+            return series
+        period = w.sample_period_s(self.df.index)
+        buf = int(round(self._VOLTAGE_MASK_BUFFER_S / period)) if period else 0
+        if buf > 0:
+            # Dilate the fault mask by `buf` samples on each side: a centered
+            # rolling max over (2·buf+1) samples flags any sample within `buf`
+            # of a fault. Runs positionally on the boolean values.
+            bad = (pd.Series(bad.astype(float))
+                   .rolling(window=2 * buf + 1, center=True, min_periods=1)
+                   .max().to_numpy() > 0)
+        out = series.to_numpy(dtype=float).copy()
+        out[bad] = np.nan
+        return pd.Series(out, index=series.index)
+
     def _apply_all_calibrations(self, progress_cb=None):
         """Recompute cal_result_df from saved_calibrations and refresh every
         tab. ``progress_cb(label, frac)``, if given, is called at named
@@ -578,8 +628,13 @@ class CalibrationMixin:
         if self.df is None:
             return
         import math
+        import numpy as np
         import pandas as pd
         _progress("Applying raw→calibrated transforms…", 0.0)
+        # Raw signals whose voltage is physically bounded by the cal endpoints —
+        # out-of-range samples get NaN'd (+ guard band, see _mask_voltage_out_of_range)
+        # AND get automatic zero-min bias calibration (see below).
+        _susp_signals = {spec[0] for spec in self._HEADER_SUSP_CAL}
         cols = {}
         for cal in self.saved_calibrations:
             signal   = cal["Signal"]
@@ -600,7 +655,24 @@ class CalibrationMixin:
                 continue
             a = (val_max - val_min) / (raw_max - raw_min)
             b = val_min - a * raw_min
-            cols[cal_name] = a * self.df[signal] + b - bias
+            series = a * self.df[signal] + b            # zero-bias calibrated value
+            if signal in _susp_signals:
+                # Out-of-range voltage → NaN (sensor fault / topout overshoot)
+                # BEFORE anything uses the data, so a fault can't corrupt the zero.
+                series = self._mask_voltage_out_of_range(
+                    series, self.df[signal], raw_min, raw_max)
+                # AUTOMATIC zero-min calibration (replaces the old manual Auto-Cal
+                # buttons): bias every suspension reading so the fully-extended
+                # (minimum VALID) position is exactly 0 mm. Computed on the FULL
+                # data — the stopped/walking view filters aren't applied here, so a
+                # topout captured while the bike is lifted at a stop still counts.
+                # Robust: min over masked-valid data only, so an out-of-range
+                # overshoot can never set the zero.
+                vals = series.to_numpy()
+                auto_min = np.nanmin(vals) if np.isfinite(vals).any() else np.nan
+                bias = float(auto_min) if np.isfinite(auto_min) else 0.0
+                cal["Bias"] = round(bias, 6)   # persist so the table/form reflect it
+            cols[cal_name] = series - bias
         self.cal_result_df = pd.DataFrame(cols, index=self.df.index)
 
         # GPS ground speed is logged in m/s (firmware gps.speed_mps). Always
@@ -622,7 +694,13 @@ class CalibrationMixin:
         #   left = -z                    (vehicle +Y is left; +Z_body points right)
         #   up   = -sinθ·x - cosθ·y
         # Rest check (chip reads +g up): x≈-g·sinθ, y≈-g·cosθ, z≈0
-        #   → aVert = +1g, aFwd = 0, aLat = 0.  TODO: validate signs vs real log.
+        #   → aVert = +1g, aFwd = 0, aLat = 0.  VALIDATED (2026-07-11) on both the
+        #   20260710_144915 (81-min, 1.13M-row) and 20260703_200146 rides: at rest
+        #   aVert≈+0.96-0.99g, |a|=0.99, aFwd/aLat≈0 (a leaned-bike rest shows +aLat
+        #   paired with +Roll — itself a frame-consistency check); cornering
+        #   corr(aLat, v·yawrate)=+0.53 (slope<1 expected — the bike leans in). The
+        #   braking corr(aFwd, d·speed/dt) is the right sign but washes out on long
+        #   varied rides (+0.02..+0.24); the at-rest gravity split is the real check.
         if "aX_g" in self.cal_result_df.columns and "aY_g" in self.cal_result_df.columns:
             import numpy as np
             try:
@@ -659,7 +737,9 @@ class CalibrationMixin:
         # unequally-spaced pairs, so we average 2 consecutive readings to get
         # one representative trigger frequency, then divide by triggers-per-rev
         # (wheel 12, crank 10) to get rev/s. (Firmware doc shorthand "×6 / ×5".)
-        # TODO: validate the trigger/pair factor against a real motion log.
+        # Trigger/pair factor VALIDATED (2026-07-05, ride 20260703_200146): rear-wheel
+        # Hz cross-checked vs GPS ground speed implied ~12.6 targets/rev (÷12 correct);
+        # crank ÷10 gives ~107 RPM median. See CLAUDE.md "Speed from frequency channels".
         _progress("Deriving wheel/crank speed…", 1 / 7)
         self._derive_speed("Crank_Spd_RPM",            "chain_ring_spokes_var", None,                  "rpm")
         self._derive_speed("Front_Horz_Wheel_Spd_mph", "front_spoke_count_var", "front_wheel_circ_var", "mph")
@@ -745,11 +825,53 @@ class CalibrationMixin:
 
         _progress("Computing wheel position…", 2 / 7)
 
+        # ── Optional add-on channels ──────────────────────────────────────────
+        # Produced by the local add-on module when it is present (see the import
+        # guard near the top of this file); absent on a fresh clone. Only the
+        # input gathering (UI rate / preload / head-angle fields + the
+        # motion-ratio table) lives here; everything else is in that module.
+        if _HAS_MODEL_IP:
+            try:
+                _k_f = float(self.front_spring_rate_var.get())
+                _k_r = float(self.rear_spring_rate_var.get())
+            except (AttributeError, ValueError):
+                _k_f = _k_r = float("nan")
+
+            def _preload(attr):
+                try:
+                    return float(getattr(self, attr).get())
+                except (AttributeError, ValueError):
+                    return 0.0
+
+            try:
+                _hta = float(self.head_tube_angle_var.get())
+            except (AttributeError, ValueError):
+                _hta = None
+
+            _shock_lut, _wheel_lut = [], []
+            if hasattr(self, "mr_tree"):
+                for iid in self.mr_tree.get_children():
+                    vals = self.mr_tree.item(iid, "values")
+                    try:
+                        _shock_lut.append(float(vals[0]))
+                        _wheel_lut.append(float(vals[1]))
+                    except (ValueError, IndexError):
+                        pass
+
+            apply_model_IP(self.cal_result_df, _k_f, _k_r,
+                           _preload("front_preload_var"),
+                           _preload("rear_preload_var"),
+                           _hta, _shock_lut, _wheel_lut)
+
         # Wheel vertical speed (mm/s) — Savitzky-Golay derivative of position.
         _period = w.sample_period_s(self.cal_result_df.index)
         for _pos, _spd in [
             ("Front_Wheel_Pos_mm", "Front_Vert_Wheel_Spd_mmps"),
             ("Rear_Wheel_Pos_mm",  "Rear_Vert_Wheel_Spd_mmps"),
+            # SHAFT speeds — derivative of the raw sensor/shaft position, the
+            # quantity damper LS/HS circuits actually see (Susp Speed tab).
+            ("Fork_Pos_mm",        "Fork_Shaft_Spd_mmps"),
+            ("Shock_Pos_mm",       "Shock_Shaft_Spd_mmps"),
         ]:
             if _pos in self.cal_result_df.columns:
                 self.cal_result_df[_spd] = self._savgol_velocity(
@@ -765,21 +887,12 @@ class CalibrationMixin:
                 self.cal_result_df["Rear_Wheel_Pos_Perc"] <= 9
             ).astype(int)
 
-        _progress("Computing suspension velocity + dynamic sag…", 3 / 7)
+        _progress("Computing suspension velocity…", 3 / 7)
 
-        # Dynamic sag: 0.3 Hz low-pass of Wheel_Pos_Perc, mean-centred
-        #   result = filtered - mean(filtered)  [% points]
-        _TWO_PI_FC = 2.0 * np.pi * 0.3   # 0.3 Hz cutoff
-        _period_sag = w.sample_period_s(self.cal_result_df.index)
-        _dt_arr = self.cal_result_df.index.to_series().diff().dt.total_seconds().values
-        for _src, _dst in [
-            ("Front_Wheel_Pos_Perc", "Front_Dynamic_Sag_Perc"),
-            ("Rear_Wheel_Pos_Perc",  "Rear_Dynamic_Sag_Perc"),
-        ]:
-            if _src in self.cal_result_df.columns:
-                _sig = self.cal_result_df[_src].values.astype(float)
-                _out = self._time_varying_lowpass(_sig, _dt_arr, _TWO_PI_FC, _period_sag)
-                self.cal_result_df[_dst] = _out - np.nanmean(_out)
+        # ── Dynamic sag ──────────────────────────────────────────────────────
+        # Removed 2026-07-20 (Front_/Rear_Dynamic_Sag_Perc) — rebuilding from
+        # scratch. New definition goes here. The `_time_varying_lowpass` /
+        # `_time_varying_lowpass_loop` helpers remain available for reuse.
 
         _progress("Selecting gear / computing IMU attitude…", 4 / 7)
 
@@ -812,14 +925,28 @@ class CalibrationMixin:
                         _cr_teeth * _crank_rpm / _wheel_rpm,
                         np.nan)
 
-                # For each sample find nearest cassette gear
+                # For each sample find nearest cassette gear (per-sample candidate)
                 _gear = np.full(len(_apparent), np.nan)
                 _valid = np.isfinite(_apparent)
                 if _valid.any():
                     _diffs = np.abs(_apparent[_valid, None] - _cass_teeth[None, :])
                     _gear[_valid] = _gear_nums[_diffs.argmin(axis=1)]
 
-                self.cal_result_df["Gear_Selected"] = _gear
+                # Gate: a gear is only valid during SUSTAINED pedaling — crank >
+                # GEAR_MIN_CRANK_RPM for >= GEAR_SUSTAIN_S continuously. Everywhere
+                # else it's NaN (coasting/stopped: the chain isn't driving, so the
+                # crank/wheel ratio is meaningless). Within a sustained run the gear
+                # is LATCHED to the dominant value over the sustain window (rolling
+                # median), so it holds steady and only changes once a new gear is
+                # held long enough — no per-sample flicker.
+                _period = w.sample_period_s(self.cal_result_df.index)
+                _min_n  = max(1, int(round(GEAR_SUSTAIN_S / _period))) if _period else 1
+                _ped    = _crank_rpm > GEAR_MIN_CRANK_RPM        # NaN crank → False
+                _sustained = self._min_run_mask(_ped, _min_n)
+                _stable = (pd.Series(np.where(_ped, _gear, np.nan))
+                           .rolling(_min_n, center=True, min_periods=1)
+                           .median().round().to_numpy())
+                self.cal_result_df["Gear_Selected"] = np.where(_sustained, _stable, np.nan)
             except Exception as e:
                 print(f"Gear selection calc error: {e}")
 
@@ -830,7 +957,16 @@ class CalibrationMixin:
         # rotate the body-frame orientation into the vehicle frame using the
         # fixed mount rotation R (same install axes as the accel/gyro block),
         # zero out the rest pose, and read Euler angles. Quat NaN → NaN out.
-        # TODO: validate Euler signs/order against a real log once available.
+        # Euler signs VALIDATED against GPS ground truth (2026-07-13, ride
+        # 20260710_144915) and kept as strict ISO 8855 (X-fwd, Y-left, Z-up):
+        #   YAW  — corr(gYaw, GPS turn rate)=+0.54, left turn → +gYaw (correct).
+        #   ROLL — left turn → lean-left → -Roll (correct; +Roll = lean right).
+        #   PITCH — +Pitch = nose-DOWN (ISO). corr(Pitch, GPS climb)= -0.39 over
+        #     sustained grades, i.e. climbing (nose-up) reads NEGATIVE — this is
+        #     the correct ISO convention (intentional, per user), NOT a bug.
+        # Angles are relative to the FIRST valid sample's pose (_R_ref below), so a
+        # non-level bike at record-start biases the pitch/roll zero by a few deg;
+        # Yaw reference is arbitrary (SFLP is gravity-aligned, no magnetometer).
         if all(s in self.df.columns for s in ("quat_x", "quat_y", "quat_z")):
             import numpy as np
             try:
@@ -861,8 +997,13 @@ class CalibrationMixin:
                     _R_wv = _R_wb * _R_vb.inv()          # world ← vehicle
                     _R_ref = _R_wv[0]                    # zero the rest pose
                     _R_rel = _R_ref.inv() * _R_wv
-                    _eul = _R_rel.as_euler("ZYX", degrees=True)   # yaw, pitch, roll
+                    _eul = _R_rel.as_euler("ZYX", degrees=True)   # yaw, pitch, roll (ISO ZYX)
                     yaw[valid]   = _eul[:, 0]
+                    # Strict ISO 8855: +Pitch = nose-DOWN (right-hand about +Y-left),
+                    # +Roll = lean-right, +Yaw = left turn. Kept as-is by design.
+                    # Verified against GPS on 20260710_144915: corr(Pitch, GPS climb
+                    # rate) = -0.39 over sustained grades (climbing = nose-up = ISO
+                    # negative pitch, correct); left turn → +gYaw & -Roll (lean left).
                     pitch[valid] = _eul[:, 1]
                     roll[valid]  = _eul[:, 2]
 
@@ -871,6 +1012,12 @@ class CalibrationMixin:
                 self.cal_result_df["Yaw_deg"]   = yaw
             except Exception as e:
                 print(f"Attitude (quaternion) calc error: {e}")
+
+        # ── Filtered (Filt_) trend channels ──────────────────────────────────
+        # Zero-phase (forward-backward) low-pass twins of the selected signals —
+        # the slow ride-height / attitude trend with normal bumps removed. Placed
+        # after attitude so every FILT_SIGNALS source column already exists.
+        self._apply_filt_channels()
 
         _progress("Finalizing calibration table…", 5 / 7)
 
@@ -886,10 +1033,23 @@ class CalibrationMixin:
                     cal["Calibrated_Min"] = float("nan")
                     cal["Calibrated_Max"] = float("nan")
 
-        # Cache the unfiltered result and clear any active time filter — the
-        # GPS tab's time-range filter slices this cached frame (see _apply_time_filter).
+        # Auto-filters: detect non-riding periods and expose each as a plottable
+        # 0/1 signal. "Stopped" = wheels not turning AND not pedaling; "Walking" =
+        # a long slow-movement stretch with the rear near topout (bike walked, no
+        # rider weight). Masks are cached on the mixin; the default-on checkboxes
+        # slice them out of the view below (see _recompute_filtered_view).
+        _progress("Detecting stopped / walking periods…", 5.5 / 7)
+        self._stopped_mask = self._compute_stopped_mask(self.cal_result_df)
+        self.cal_result_df["Stopped"] = self._stopped_mask.astype(float)
+        self._walking_mask = self._compute_walking_mask(self.cal_result_df)
+        self.cal_result_df["Walking"] = self._walking_mask.astype(float)
+
+        # Cache the unfiltered result and clear any active time filter — both the
+        # GPS tab's time-range filter and the stopped filter slice this cached
+        # frame (see _recompute_filtered_view).
         self._cal_full = self.cal_result_df
         self._time_filter = None
+        self._update_filter_stats()   # refresh the "N s (P%)" readouts by the checkboxes
         if hasattr(self, "_gps_reset_markers"):
             self._gps_reset_markers()
         _progress("Refreshing all tabs…", 6 / 7)
@@ -898,7 +1058,9 @@ class CalibrationMixin:
         # instead of jumping back to 0 when the redraw phase starts.
         _redraw_cb = ((lambda label, frac: progress_cb(label, 6 / 7 + frac / 7))
                       if progress_cb else None)
-        self._refresh_all_analysis_tabs(progress_cb=_redraw_cb)
+        # Apply the active filters (default-on stopped filter + any GPS window)
+        # and redraw every tab from the resulting view.
+        self._recompute_filtered_view(progress_cb=_redraw_cb)
         _progress("Done", 1.0)
 
     def _refresh_all_analysis_tabs(self, progress_cb=None):
@@ -919,6 +1081,197 @@ class CalibrationMixin:
                 progress_cb(f"Redrawing {label} tab…", i / len(_steps))
             fn()
         self._refresh_cal_treeview_display()
+
+    # ── Auto-Filter Out Stopped Times ─────────────────────────────────────────
+    @staticmethod
+    def _min_run_mask(bool_arr, min_samples):
+        """Zero out contiguous True runs shorter than ``min_samples`` (keeps only
+        sustained runs). Positional/vectorized; used to require a stop to last a
+        minimum duration before it counts, so the ride isn't fragmented at every
+        brief wheel-trigger gap."""
+        import numpy as np
+        b = np.asarray(bool_arr, dtype=bool)
+        if min_samples <= 1 or not b.any():
+            return b
+        edges  = np.diff(np.concatenate(([0], b.view(np.int8), [0])))
+        starts = np.flatnonzero(edges == 1)
+        ends   = np.flatnonzero(edges == -1)
+        out = np.zeros_like(b)
+        for s, e in zip(starts, ends):
+            if e - s >= min_samples:
+                out[s:e] = True
+        return out
+
+    @staticmethod
+    def _bridge_short_gaps(stopped_arr, min_active_samples):
+        """Exit-stopped hysteresis: re-mark as stopped any *movement* (False) run
+        shorter than ``min_active_samples`` that is flanked by stopped on both
+        sides — so a stopped period only ends after **sustained** movement, and a
+        brief move (shuffling the bike, one stray trigger) doesn't un-stop it. A
+        qualifying movement run (≥ ``min_active_samples``) is left untouched and
+        therefore reads as moving from its **first** sample ("forward-looking
+        permissive" — its leading seconds are not counted as stopped). Movement
+        runs touching a data edge are left as movement (can't confirm they're
+        inside a stop)."""
+        import numpy as np
+        b = np.asarray(stopped_arr, dtype=bool)
+        if min_active_samples <= 1 or not b.any():
+            return b
+        active = ~b
+        edges  = np.diff(np.concatenate(([0], active.view(np.int8), [0])))
+        starts = np.flatnonzero(edges == 1)
+        ends   = np.flatnonzero(edges == -1)
+        n = len(b)
+        out = b.copy()
+        for s, e in zip(starts, ends):
+            if (e - s) < min_active_samples and s > 0 and e < n:
+                out[s:e] = True   # brief movement inside a stop → stays stopped
+        return out
+
+    def _compute_stopped_mask(self, df):
+        """Boolean array (positional, True = stopped) for Auto-Filter Out Stopped
+        Times. The bike is stopped when the **wheels aren't turning AND the rider
+        isn't pedaling**. Wheel speed is NaN whenever there's been no trigger in the
+        last ~0.5 s (see _derive_speed), so a missing/near-zero reading means "not
+        turning"; crank pedaling overrides (a slow techy section has sparse wheel
+        triggers but real motion). GPS, suspension, and IMU are deliberately unused.
+        **Asymmetric hysteresis:** entering stopped needs a still run ≥ ``STOPPED_MIN_S``
+        (drops tiny stops); *exiting* stopped needs **sustained** movement ≥
+        ``STOPPED_RESUME_S`` — briefer moves during a stop are bridged back into it,
+        and the qualifying movement run reads as moving from its first sample
+        (forward-permissive). Returns all-False when there is no usable wheel data
+        (detection impossible → filter nothing)."""
+        import numpy as np
+        n = len(df)
+        if n == 0:
+            return np.zeros(0, dtype=bool)
+
+        def _usable(col):
+            return col in df.columns and bool(df[col].notna().any())
+        have_front = _usable("Front_Horz_Wheel_Spd_mph")
+        have_rear  = _usable("Rear_Horz_Wheel_Spd_mph")
+        if not (have_front or have_rear):
+            return np.zeros(n, dtype=bool)
+
+        # Wheels not turning: AND over whichever wheel channels have real data.
+        wheel_still = np.ones(n, dtype=bool)
+        for col, have in (("Front_Horz_Wheel_Spd_mph", have_front),
+                          ("Rear_Horz_Wheel_Spd_mph",  have_rear)):
+            if have:
+                s = df[col]
+                wheel_still &= (s.isna() | (s < STOPPED_WHEEL_MPH)).to_numpy()
+
+        pedaling = np.zeros(n, dtype=bool)
+        if "Crank_Spd_RPM" in df.columns:
+            c = df["Crank_Spd_RPM"]
+            pedaling = (c.notna() & (c > STOPPED_CRANK_RPM)).to_numpy()
+
+        stopped_raw = wheel_still & ~pedaling
+        period = w.sample_period_s(df.index)
+        # Exit-stopped needs sustained movement (bridge briefer moves back into the
+        # stop); then enter-stopped needs a sustained still run (drop tiny stops).
+        resume_samples = int(round(STOPPED_RESUME_S / period)) if period else 0
+        min_samples    = int(round(STOPPED_MIN_S / period))    if period else 0
+        stopped = self._bridge_short_gaps(stopped_raw, resume_samples)
+        return self._min_run_mask(stopped, min_samples)
+
+    def _compute_walking_mask(self, df):
+        """Boolean array (positional, True = walking) for Auto-Filter Walking. The
+        bike is being WALKED (not ridden) during a long continuous stretch of very
+        slow wheel movement with the rear suspension near topout — i.e. slow, but
+        no rider weight on the bike. A sample is walking when the **centered
+        rolling-average wheel speed** (over ``WALK_SPEED_WIN_S``, forward+backward)
+        is < ``WALK_MAX_MPH`` AND ``Rear_Wheel_Pos_Perc`` < ``WALK_REAR_COMP_PERC``;
+        then only **continuous** runs ≥ ``WALK_MIN_S`` count (a sustained walk, not
+        a momentary slow techy move). GPS and IMU are unused. Returns all-False
+        when the required signals are absent (detection impossible → filter
+        nothing). A truly-stopped span (no wheel reading in the whole window) is
+        excluded here — that is the Stopped filter's job."""
+        import numpy as np
+        n = len(df)
+        if n == 0:
+            return np.zeros(0, dtype=bool)
+        if "Rear_Wheel_Pos_Perc" not in df.columns:
+            return np.zeros(n, dtype=bool)
+        wheel_cols = [c for c in ("Front_Horz_Wheel_Spd_mph", "Rear_Horz_Wheel_Spd_mph")
+                      if c in df.columns and bool(df[c].notna().any())]
+        if not wheel_cols:
+            return np.zeros(n, dtype=bool)
+
+        period = w.sample_period_s(df.index)
+        # Slow but MOVING: the faster available wheel (row-wise max, skipna),
+        # averaged over a CENTERED window (2 s each side) so momentary speed
+        # spikes don't disqualify a sustained slow crawl. The rolling mean is
+        # nan-aware (mean of present wheel readings, min_periods=1); a window with
+        # no reading at all → NaN → not slow (fully-stopped spans stay the Stopped
+        # filter's job).
+        wheel_spd = df[wheel_cols].max(axis=1)
+        win = int(round(WALK_SPEED_WIN_S / period)) if period else 1
+        win = max(1, win + (win % 2 == 0))   # odd → symmetric centering
+        avg_spd = wheel_spd.rolling(win, center=True, min_periods=1).mean()
+        slow = (avg_spd < WALK_MAX_MPH).to_numpy()
+        # Rear suspension uncompressed (near topout → no rider weight). NaN → not
+        # walking (compression unknown).
+        uncompressed = (df["Rear_Wheel_Pos_Perc"] < WALK_REAR_COMP_PERC).to_numpy()
+
+        walking_raw = slow & uncompressed
+        min_samples = int(round(WALK_MIN_S / period)) if period else 0
+        return self._min_run_mask(walking_raw, min_samples)
+
+    def _recompute_filtered_view(self, progress_cb=None):
+        """Rebuild ``self.cal_result_df`` from the cached full frame ``_cal_full``
+        by applying every active filter, then redraw all analysis tabs. Filters
+        compose here (all AND-ed onto a keep-mask): the Auto-Filter Stopped Times
+        mask and the Auto-Filter Walking mask (each when its checkbox is on), plus
+        the GPS tab's time-window filter (``self._time_filter``). Cheap — a boolean
+        slice + redraw, no re-run of the calibration cascade. Positional numpy mask
+        so duplicate multi-file timestamps can't cause index-alignment blow-ups."""
+        import numpy as np
+        base = getattr(self, "_cal_full", None)
+        if base is None:
+            return
+        mask = np.ones(len(base), dtype=bool)   # True = keep the row
+        # Auto-filter masks: drop rows flagged by an enabled filter.
+        for var_name, mask_name in (("auto_filter_stopped_var", "_stopped_mask"),
+                                    ("auto_filter_walking_var", "_walking_mask")):
+            var = getattr(self, var_name, None)
+            fm  = getattr(self, mask_name, None)
+            if (var is not None and var.get()
+                    and fm is not None and len(fm) == len(base)):
+                mask &= ~np.asarray(fm, dtype=bool)
+        tf = getattr(self, "_time_filter", None)
+        if tf:
+            tmin, tmax = tf
+            idx = base.index
+            mask &= np.asarray((idx >= tmin) & (idx <= tmax))
+        self.cal_result_df = base[mask]
+        self._refresh_all_analysis_tabs(progress_cb=progress_cb)
+
+    def _on_toggle_auto_filter(self):
+        """Import-tab auto-filter checkbox handler (Stopped / Walking) — re-slice
+        the cached full frame (no recompute) so toggling is near-instant."""
+        if getattr(self, "_cal_full", None) is not None:
+            self._recompute_filtered_view()
+
+    def _update_filter_stats(self):
+        """Refresh the "N s  (P%)" readouts next to the import-tab filter
+        checkboxes: each mask's total flagged time (seconds) and share of the
+        WHOLE recording. Fixed per ride — independent of which checkboxes are on
+        or of the GPS time window — so it's set when the masks are (re)computed."""
+        import numpy as np
+        base = getattr(self, "_cal_full", None)
+        period = w.sample_period_s(base.index) if base is not None else None
+        for mask_name, var_name in (("_stopped_mask", "_stopped_stats_var"),
+                                    ("_walking_mask", "_walking_stats_var")):
+            var = getattr(self, var_name, None)
+            if var is None:
+                continue
+            m = getattr(self, mask_name, None)
+            if m is None or not period or len(m) == 0:
+                var.set("")
+                continue
+            m = np.asarray(m, dtype=bool)
+            var.set(f"{m.sum() * period:.0f} s  ({100.0 * m.mean():.1f}%)")
 
     def _refresh_cal_treeview_display(self):
         """Redraw the treeview from saved_calibrations without re-running calibrations."""
