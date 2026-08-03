@@ -3,6 +3,3 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
-
-# Local-only modules (never committed)
-*_ip.py

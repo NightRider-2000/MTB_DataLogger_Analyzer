@@ -138,6 +138,17 @@ class BikeParamsMixin:
             self._update_sag_plots()
             self._recompute_rear_wheel_travel()
 
+        def _upd_front_center(*_):
+            # Front center = wheelbase − chainstay length (derived, informational).
+            try:
+                fc = (float(self.wheel_base_var.get())
+                      - float(self.chainstay_len_var.get()))
+                self._front_center_entry.delete(0, tk.END)
+                self._front_center_entry.insert(0, f"{fc:.0f}")
+                self.front_center_var.set(f"{fc:.6g}")
+            except (AttributeError, ValueError, tk.TclError):
+                pass
+
         _default_fst = round(150 * math.sin(math.radians(65)), 2)
 
         # ── LEFT column: Suspension + Bike Geometry ───────────────────────────
@@ -165,9 +176,20 @@ class BikeParamsMixin:
         _kv_row(geo, 1, "Head Tube Angle", "65", "deg", "head_tube_angle_var",
                 cb=_upd_fst, entry_attr="_head_tube_angle_entry", entry_col=2)
         _kv_row(geo, 2, "Wheel Base", "1242", "mm", "wheel_base_var",
-                entry_attr="_wheel_base_entry", entry_col=2)
-        _kv_row(geo, 3, "IMU Pitch Offset", "30", "deg", "pitch_offset_var",
+                cb=_upd_front_center, entry_attr="_wheel_base_entry", entry_col=2)
+        _kv_row(geo, 3, "Chainstay Length", "430", "mm", "chainstay_len_var",
+                cb=_upd_front_center, entry_attr="_chainstay_len_entry", entry_col=2)
+        # Front center is derived (= wheelbase − chainstay); recomputed whenever
+        # either input changes and once at build end.
+        _kv_row(geo, 4, "Front Center Length", "812", "mm", "front_center_var",
+                entry_attr="_front_center_entry", entry_col=2)
+        # BB Height = height of the bottom-bracket (load point) above the tire-
+        # contact line; a geometry input for the add-on model.
+        _kv_row(geo, 5, "BB Height", "340", "mm", "bb_height_var",
+                cb=_recalc, entry_attr="_bb_height_entry", entry_col=2)
+        _kv_row(geo, 6, "IMU Pitch Offset", "30", "deg", "pitch_offset_var",
                 cb=_recalc, entry_attr="_pitch_offset_entry", entry_col=2)
+        _upd_front_center()
 
         # Lock the two left cards to identical column widths so the Front/Rear
         # boxes — and the geometry values placed under "Rear" — line up across

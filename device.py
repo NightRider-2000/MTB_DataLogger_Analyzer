@@ -166,9 +166,10 @@ class DeviceMixin:
     def _build_dashboard_panel(self, parent):
         frame = tk.Frame(parent, bg=BG)
         frame.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        # Left column split in thirds: config editor (top 1/3), dashboard (2/3)
-        frame.rowconfigure(1, weight=1)   # config table
-        frame.rowconfigure(3, weight=2)   # dashboard text
+        # Config editor (top) flexes to fill; dashboard is a fixed-height log
+        # below it (shortened ~8 lines so the config table gets more room).
+        frame.rowconfigure(1, weight=1)   # config table — flexes to fill
+        frame.rowconfigure(3, weight=0)   # dashboard text — fixed height (below)
         frame.columnconfigure(0, weight=1)
 
         self._build_config_panel(frame)
@@ -191,6 +192,7 @@ class DeviceMixin:
             bg=FIELD, fg=DARK, insertbackground=DARK,
             relief="flat", bd=0, wrap=tk.NONE,
             font=("TkFixedFont", 13),
+            height=17,   # fixed log height (~8 lines shorter; frees room for config)
             state=tk.DISABLED)
         self._dev_dashboard.grid(row=0, column=0, sticky="nsew")
 

@@ -15,7 +15,7 @@ from constants import (BG, DARK, FIELD, ROW_ALT, CAL_FIELDS, HIST_BAR_COLOR, GRI
 # set of derived channels; when absent (e.g. a fresh clone) those channels are
 # simply omitted (guarded at the call site) and the rest of the app is unaffected.
 try:
-    from model_ip import apply_model_IP
+    from model_ip import apply_model_IP, front_weight_bias_IP
     _HAS_MODEL_IP = True
 except ImportError:
     _HAS_MODEL_IP = False
@@ -858,10 +858,21 @@ class CalibrationMixin:
                     except (ValueError, IndexError):
                         pass
 
+            def _num(attr):
+                try:
+                    return float(getattr(self, attr).get())
+                except (AttributeError, ValueError):
+                    return None
+
             apply_model_IP(self.cal_result_df, _k_f, _k_r,
                            _preload("front_preload_var"),
                            _preload("rear_preload_var"),
                            _hta, _shock_lut, _wheel_lut)
+            # Geometry for the add-on front-bias channel, applied after the
+            # filtered-pitch twin exists (see below, post _apply_filt_channels).
+            self._ip_geo = (_num("chainstay_len_var"),
+                            _num("front_center_var"),
+                            _num("bb_height_var"))
 
         # Wheel vertical speed (mm/s) — Savitzky-Golay derivative of position.
         _period = w.sample_period_s(self.cal_result_df.index)
@@ -1018,6 +1029,11 @@ class CalibrationMixin:
         # the slow ride-height / attitude trend with normal bumps removed. Placed
         # after attitude so every FILT_SIGNALS source column already exists.
         self._apply_filt_channels()
+
+        # Pitch-aware add-on front-bias channel — needs the filtered pitch twin
+        # (Filt_Pitch_deg) that _apply_filt_channels just created.
+        if _HAS_MODEL_IP and getattr(self, "_ip_geo", None) is not None:
+            front_weight_bias_IP(self.cal_result_df, *self._ip_geo)
 
         _progress("Finalizing calibration table…", 5 / 7)
 

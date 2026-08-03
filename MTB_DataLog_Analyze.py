@@ -148,8 +148,10 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
 
         center = tk.Frame(self.signals_tab, bg=BG)
         center.pack(fill=tk.BOTH, expand=True)
-        center.columnconfigure(0, weight=1)
-        center.columnconfigure(1, weight=4)
+        # Left panel is a FIXED narrow width so it never changes when the right
+        # side switches between the plot preview and the EventLog table.
+        center.columnconfigure(0, weight=0, minsize=350)
+        center.columnconfigure(1, weight=1)
         center.rowconfigure(0, weight=1)
 
         self._build_left_panel(center)
@@ -227,26 +229,39 @@ class MountainBikeApp(DeviceMixin, FileManagerMixin, PlotsMixin, CalibrationMixi
         self.signal_listbox.bind("<<ListboxSelect>>", self.on_signal_select)
 
     def _build_plots_panel(self, parent):
-        # Just a quick overview of the loaded data — no zoom/pan/save toolbar;
-        # a plain time-series + histogram is enough for a glance at a ride.
+        # The right panel holds two stacked views sharing one cell, one shown at
+        # a time: the quick-glance PREVIEW (time-series + histogram) for ride
+        # CSVs, and a wrapped TABULAR view for EventLog_* files (see plots.py:
+        # _show_preview_view / _show_eventlog).
         plots = tk.Frame(parent, bg=BG)
         plots.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
         plots.columnconfigure(0, weight=1)
         plots.rowconfigure(0, weight=1)
-        plots.rowconfigure(1, weight=1)
+
+        # Preview view — no zoom/pan/save toolbar; a plain time-series +
+        # histogram is enough for a glance at a ride.
+        preview = tk.Frame(plots, bg=BG)
+        preview.grid(row=0, column=0, sticky="nsew")
+        preview.columnconfigure(0, weight=1)
+        preview.rowconfigure(0, weight=1)
+        preview.rowconfigure(1, weight=1)
+        self._preview_view = preview
 
         self.fig = w.make_figure(figsize=(8, 3), dpi=100)
         self.ax  = self.fig.add_subplot(111)
         self.ax.set_facecolor(BG)
-        self.canvas, cv_widget = w.make_canvas(self.fig, plots)
+        self.canvas, cv_widget = w.make_canvas(self.fig, preview)
         self.canvas.draw()
         cv_widget.grid(row=0, column=0, sticky="nsew")
 
         self.fig_hist = w.make_figure(figsize=(8, 3), dpi=100, layout="constrained")
         self.ax_hist  = self.fig_hist.add_subplot(111)
         self.ax_hist.set_facecolor(BG)
-        self.canvas_hist, hist_widget = w.make_canvas(self.fig_hist, plots)
+        self.canvas_hist, hist_widget = w.make_canvas(self.fig_hist, preview)
         hist_widget.grid(row=1, column=0, sticky="nsew")
+
+        # EventLog tabular view (hidden until an EventLog_ file is selected).
+        self._build_eventlog_view(plots)
 
     # ── Calibration Settings tab ─────────────────────────────────────────────
     def _build_calibration_tab(self):

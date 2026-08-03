@@ -69,6 +69,11 @@ GEAR_SUSTAIN_S     = 3.0
 # crossover is damper/adjuster dependent, hence a band, not a line.
 SUSP_LSHS_BAND_MMPS = (150.0, 300.0)
 
+# Time Series: light transparent red overlay marking the time regions the
+# stopped/walking auto-filters exclude (Time Series shows the full ride and
+# shades these instead of dropping them — see time_series.py).
+TS_FILTER_SPAN_COLOR = "#e03b3b"
+
 # ── Filtered (Filt_) trend channels (calibration.py _filt / _apply_filt_channels)
 # Zero-phase (forward-backward) low-pass that strips normal bumps and leaves the
 # slow ride-height / attitude trend. It runs the dt-aware one-pole TWICE (forward

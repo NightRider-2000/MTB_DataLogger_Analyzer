@@ -2,7 +2,9 @@ import tkinter as tk
 from tkinter import ttk
 
 import widgets as w
-from constants import BG, DARK, FIELD, HIST_COLORS, HIST_BINS
+from constants import BG, DARK, FIELD, HIST_COLORS, HIST_BINS, TS_FILTER_SPAN_COLOR
+
+_TS_FILTER_SPAN_ALPHA = 0.12   # light transparent red for filtered-out regions
 
 _N_PLOTS     = 6   # stacked plots (page scrolls vertically to reach them all)
 _N_SIGS      = 4   # signals per plot
@@ -151,15 +153,65 @@ class TimeSeriesMixin:
 
     # ── Signal population ─────────────────────────────────────────────────────
 
+    def _ts_source(self):
+        """Time Series plots the FULL, UNFILTERED frame (`_cal_full`) so rows
+        excluded by the stopped/walking auto-filters stay visible (shaded red);
+        the other analysis tabs still use the filtered `cal_result_df`. Falls
+        back to `cal_result_df` if the full frame isn't cached yet."""
+        base = getattr(self, "_cal_full", None)
+        return base if base is not None else getattr(self, "cal_result_df", None)
+
+    def _ts_filter_intervals(self):
+        """[(start, stop)] in matplotlib date-number units for each contiguous
+        region excluded by the currently-ON stopped/walking filters (union of
+        whichever checkboxes are on; empty if neither). Used BOTH to shade the
+        region red and to drop those samples from the marginal histograms."""
+        import numpy as np
+        import matplotlib.dates as mdates
+        base = getattr(self, "_cal_full", None)
+        if base is None or len(base) == 0:
+            return []
+        n = len(base)
+        mask = np.zeros(n, dtype=bool)
+        for var_name, mask_name in (("auto_filter_stopped_var", "_stopped_mask"),
+                                    ("auto_filter_walking_var", "_walking_mask")):
+            v = getattr(self, var_name, None)
+            m = getattr(self, mask_name, None)
+            if (v is not None and bool(v.get())
+                    and m is not None and len(m) == n):
+                mask |= np.asarray(m, dtype=bool)
+        if not mask.any():
+            return []
+        idx = base.index
+        d = np.diff(mask.astype(np.int8))
+        starts = list(np.where(d == 1)[0] + 1)
+        stops  = list(np.where(d == -1)[0] + 1)
+        if mask[0]:
+            starts.insert(0, 0)
+        if mask[-1]:
+            stops.append(n)
+        return [(mdates.date2num(idx[s]), mdates.date2num(idx[min(e, n - 1)]))
+                for s, e in zip(starts, stops)]
+
+    def _ts_draw_filter_spans(self, ax):
+        """Shade (light transparent red) the stopped/walking regions cached in
+        self._ts_filt_intervals (set by _update_ts_plot). Spans are in date-number
+        units so they line up with the lines and survive pan/zoom without a
+        re-plot; the same intervals exclude those samples from the histogram."""
+        for x0, x1 in getattr(self, "_ts_filt_intervals", []):
+            ax.axvspan(x0, x1, color=TS_FILTER_SPAN_COLOR,
+                       alpha=_TS_FILTER_SPAN_ALPHA, zorder=0, linewidth=0)
+
     def _refresh_ts_signals(self):
         if not hasattr(self, "_ts_combos"):
             return
-        if self.cal_result_df is None:
+        src = self._ts_source()
+        if src is None:
             return
         # Reset x-axis limits so they are recalculated from the new data
         self._ts_xlim_full    = None
         self._ts_xlim_current = None
-        cols = [""] + list(self.cal_result_df.columns)
+        cols = [""] + list(src.columns)
         _defaults = {
             # Plot 0 (top) — speeds
             (0, 0): "Front_Horz_Wheel_Spd_mph",
@@ -189,7 +241,8 @@ class TimeSeriesMixin:
             self._update_ts_plot(i)
 
     def _update_ts_plot(self, idx):
-        if self.cal_result_df is None:
+        src = self._ts_source()
+        if src is None:
             return
         ax  = self._ts_axes[idx]
         ax2 = self._ts_axes2[idx]   # secondary right y-axis — for the last signal slot
@@ -198,16 +251,21 @@ class TimeSeriesMixin:
         ax.clear();  ax.set_facecolor(BG)
         ax2.clear(); ax2.set_facecolor("none")
 
+        # Cache the filtered-region intervals (used for BOTH the red shading and
+        # the histogram exclusion), then shade them behind the data.
+        self._ts_filt_intervals = self._ts_filter_intervals()
+        self._ts_draw_filter_spans(ax)
+
         handles, labels = [], []
         right_colors = []
         for j, var in enumerate(self._ts_vars[idx]):
             col = var.get()
-            if not col or col not in self.cal_result_df.columns:
+            if not col or col not in src.columns:
                 continue
             color  = _TS_COLORS[j % len(_TS_COLORS)]
             is_sec = (self._ts_axis_side[idx][j] == "R")   # right (secondary) axis?
             target = ax2 if is_sec else ax
-            w.plot_time_series_smart(target, self.cal_result_df[col], color=color)
+            w.plot_time_series_smart(target, src[col], color=color)
             handles.append(target.get_lines()[-1])
             labels.append(col)
             if is_sec:
@@ -254,7 +312,10 @@ class TimeSeriesMixin:
         each PRIMARY-axis signal (slots 0-2; the 4th/secondary-axis signal is
         excluded since it has a different scale), over only the data visible in the
         current x-window, binned along the shared value (y) axis so the bins line
-        up with the plot's y-axis. Recomputed on every draw and every pan/zoom."""
+        up with the plot's y-axis. Recomputed on every draw and every pan/zoom.
+        Samples inside the stopped/walking filtered regions (the red-shaded spans)
+        are EXCLUDED so the distribution + median reflect only the kept data, even
+        though the full trace is drawn through those regions."""
         import numpy as np
         ax  = self._ts_axes[idx]
         axh = self._ts_hist_axes[idx]
@@ -262,6 +323,10 @@ class TimeSeriesMixin:
         axh.set_facecolor(BG)
         x0, x1 = ax.get_xlim()
         y0, y1 = ax.get_ylim()
+        # Flat sorted edges of the filtered intervals → a searchsorted parity
+        # test drops any x that falls inside a stopped/walking region.
+        _fedges = np.array([e for iv in getattr(self, "_ts_filt_intervals", [])
+                            for e in iv], dtype=float)
         meds = []   # (color, median) per primary signal, over the visible window
         if y1 > y0:
             edges   = np.linspace(y0, y1, HIST_BINS + 1)
@@ -272,6 +337,8 @@ class TimeSeriesMixin:
                 if xd.size == 0:
                     continue
                 m = (xd >= x0) & (xd <= x1) & np.isfinite(yd)
+                if _fedges.size:   # even parity = outside every filtered interval
+                    m &= (np.searchsorted(_fedges, xd, side="right") % 2 == 0)
                 if not m.any():
                     continue
                 counts, _ = np.histogram(yd[m], bins=edges)          # shared bins (y-range)

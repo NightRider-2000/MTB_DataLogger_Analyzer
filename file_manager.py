@@ -134,6 +134,14 @@ class FileManagerMixin:
                  if self._entries[int(i)][0] == "file"]
         if not paths:
             return
+        # EventLog_* files are device event logs, not ride data — show them as a
+        # wrapped table on the right instead of loading/plotting as a ride.
+        eventlogs = [p for p in paths
+                     if os.path.basename(p).lower().startswith("eventlog")]
+        if eventlogs:
+            self._show_eventlog(eventlogs[0])
+            return
+        self._show_preview_view()   # restore the plots view for ride CSVs
         dialog = w.ProgressDialog(self, "Loading ride data…")
         try:
             self._load_from_paths(paths, progress_cb=dialog.step)
@@ -293,6 +301,9 @@ class FileManagerMixin:
                             label, _READ_FRAC + (1 - _READ_FRAC) * frac))
                        if progress_cb else None)
             self._apply_log_config_to_calibrations(self._log_config, progress_cb=_cal_cb)
+        # Redraw the preview title now that the cascade has built the calibrated
+        # wheel speeds — that's what the title's Distance readout integrates.
+        self.plot_signals(first)
         _progress("Done", 1.0)
 
     def _refresh_signal_lists(self):
